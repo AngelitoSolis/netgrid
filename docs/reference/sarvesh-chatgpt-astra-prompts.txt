@@ -1,0 +1,130 @@
+﻿How to use ChatGPT Astra for SEO so well it feels illegal 
+
+THIS IS THE ARTICLE I WASN'T GOING TO PUBLISH. without it, you will be using ChatGPT Astra at 10% of its actual SEO potential. these 20 prompts are the other 90%. i'm giving every single one away for free. 
+ 
+i built this system after 14 years of managing local SEO for home services businesses. plumbers. HVAC companies. lawyers. cleaning companies. i've seen what moves rankings and what wastes time.
+these 20 prompts are the ones that actually move the needle. these are the actual prompts you paste into ChatGPT Astra and get real output from.
+save this. you'll need it.
+before you run a single prompt - load your business context
+ 
+"Here is everything you need to know about my business before we start any SEO work. Reference this every time I ask you to run an audit, build a strategy, or analyze competitors. Never ask me for this information again.  BUSINESS BASICS: Business name: [your business name] Address: [full address] Phone: [phone number] Website: [website URL] Google Business Profile: [GBP URL]
+Years in business: [X years]   Team size: [solo / small team / large team]  SERVICES + MARKET: Primary service: [what you do]   Secondary services: [service 2], [service 3], [service 4]   Service areas: [city 1], [city 2], [city 3], [city 4], [city 5]   Target customer: [who your best customer is] Average job value: [$X]  SEO GOALS: Top 5 keywords I want to rank for: [keyword
+1], [keyword 2], [keyword 3], [keyword 4], [keyword 5]   Keywords I currently rank for: [keyword 1], [keyword 2] Keywords I should rank for but don't: [keyword 1], [keyword 2]  CURRENT STANDINGS: Google reviews: [X] total, [X] star rating, [X] new reviews per month   GBP monthly views: [X impressions if known] Monthly website traffic: [X visits if known] Current map pack
+status: [ranking for X, not ranking for Y] Biggest SEO problem right now: [one sentence - be honest]  COMPETITORS: [competitor name] - [GBP URL] - [website] - [why they're beating you if you know] [competitor name] - [GBP URL] - [website] - [why they're beating you if you know] [competitor name] - [GBP URL] - [website] - [why they're beating you if you know]  WHAT I'VE ALREADY
+TRIED: [List any SEO work already done - agency, DIY, tools used, what worked, what didn't]  HOW I WANT YOU TO WORK: Always prioritize quick wins over long-term plays unless i ask otherwise.   When you give me a recommendation, tell me the impact level (high/medium/low) and how long it will take to see results. Always output data in spreadsheet format when comparing
+competitors. When you're unsure about something, tell me - don't guess. Never ask me for this information again. Use it as the base for everything we do together."
+once this is loaded, every prompt you run gets sharper. ChatGPT stops answering a stranger's SEO question and starts answering yours.
+ 
+
+## PART 1: GOOGLE BUSINESS PROFILE (prompts 1-8)
+- GBP category audit
+this is where i start with every single client. because if your categories are wrong, nothing else matters.
+your GBP has a primary category and secondary categories. most business owners picked their primary category when they created their listing years ago and never touched it again. meanwhile competitors have added secondary categories they didn't know existed - and those categories directly control which searches trigger your listing in the map pack.
+wrong categories = invisible for high-intent searches. it's that simple.
+"Open Chrome and go to Google Maps. Search '[service] in [city]' for these 3 keywords: [keyword1], [keyword2], [keyword3]. For each search, note which of my competitors show up in the Map Pack. Then open each competitor's GBP listing and extract their primary category and all secondary categories.  Put everything in a spreadsheet. One tab per keyword. Columns: business name,
+primary category, secondary categories, star rating, review count, ranking position. Highlight any categories my competitors have that I'm missing from my GBP.  Then give me a prioritized list of categories I should add, ranked by how many top competitors have them. Start with the ones all 3 competitors share - those are non-negotiable. End with the ones only 1 competitor has -
+those are differentiation opportunities."
+why this matters:
+i've had clients add one secondary category and start showing up for a whole new set of searches the next week. fastest win in local SEO. but the real power is pattern recognition.
+when you map categories against map pack rankings you start seeing things. like every business ranking for "emergency plumber in [city]" also has "water damage restoration" as a secondary category. those patterns are invisible unless you do this analysis. ChatGPT does the gathering. you do the thinking.
+2. GBP attributes audit
+most people don't even know GBP attributes exist - let alone that they affect rankings and conversions.
+attributes are the little tags on your profile. "veteran-owned." "free estimates." "24/7 availability." "accepts credit cards." Google uses these to match searchers with businesses. your competitors have attributes you don't. guaranteed.
+"Open Chrome and go to my Google Business Profile at [URL] and these competitors: [URL1], [URL2], [URL3]. For each listing, extract every visible attribute and tag - things like 'veteran-owned,' 'free estimates,' 'offers online appointments,' 'wheelchair accessible,' '24/7 availability,' and any others shown.  Put everything in a spreadsheet. Columns: attribute name, my listing
+(yes/no), competitor 1 (yes/no), competitor 2 (yes/no), competitor 3 (yes/no).  Highlight every attribute my competitors have that I'm missing. Then create three separate lists:  Attributes ALL top competitors have - these are table stakes, I need them immediately  Attributes 2 out of 3 competitors have - these are strong recommendations  Attributes only 1 competitor has -
+these are differentiation opportunities  For each missing attribute, tell me the likely ranking impact (high/medium/low) and whether it also affects click-through rate."
+why this matters: attributes are a two-for-one play. they help you rank for more specific searches AND they increase click-through rate because those little tags build trust before someone even clicks your listing.
+3. competitor review teardown
+star rating tells you almost nothing. what actually matters is review velocity - how fast they're getting new reviews compared to you.
+a business with 200 reviews that got 180 of them two years ago is weaker than a business with 90 reviews getting 15 a month. Google tracks this. you should too.
+"Open Chrome and go to these competitor GBP listings: [URL1], [URL2], [URL3]. For each competitor, read their last 50 reviews. Extract:  Total review count  Average star rating  How many reviews in the last 30 days  How many reviews in the last 60 days  How many reviews in the last 90 days  The most mentioned services in reviews (list top 5)  The most mentioned neighborhoods or
+cities (list top 5)  The most mentioned staff names if any  Any recurring complaints or negative themes  The top 5 keywords and phrases I should train my customers to mention in reviews based on what's working for competitors"
+why this matters:
+that second tab is your entire review strategy for the next 6-12 months. and the keyword phrases from competitor reviews tell you exactly what to ask your happy customers to mention.
+"great furnace install in highland park" is doing SEO work for that competitor whether they know it or not.
+4. review response strategy
+getting reviews is half the battle. how you respond is the other half. Google has confirmed that responding to reviews improves local ranking. your review responses are free real estate for keywords and service mentions.
+"Open Chrome and go to my GBP listing at [URL] and these competitors: [URL1], [URL2], [URL3]. For each listing, analyze the last 30 review responses from the business owner. Extract:  Total reviews vs responses (calculate response rate %)  Average response time if estimable from dates  Whether responses mention specific services  Whether responses mention specific locations or
+neighborhoods  Average response length in words  Tone (formal/casual/personal)  How negative reviews are handled - do they apologize, offer resolution, get defensive?  Any patterns in language that seem to perform well based on reply engagement  Put this in a spreadsheet comparing my response strategy vs competitors.  Then build me a complete review response template system:  3
+variations for 5-star reviews that naturally include [service keyword] + [city keyword]  3 variations for 4-star reviews that acknowledge the slight gap and invite return  3 variations for 3-star reviews that take accountability and offer resolution  3 variations for 1-2 star reviews that are professional, empathetic, and defuse negativity without being defensive  Each template
+should be 40-80 words. Make them sound like a real person wrote them, not a robot."
+why this matters: 10 reviews a month, each response mentioning your service and city -that's 120 pieces of keyword-rich content on your GBP per year that you didn't have before. and the template system means you respond to any review in under 60 seconds.
+5. GBP posts strategy
+GBP posts are the most underused feature on the platform.
+most businesses don't even know they exist. posts show up directly on your listing, expire after 7 days, and posting consistently signals to Google that your business is active. active businesses get preferred placement. your competitors probably aren't posting. that's your advantage right now.
+"Open Chrome and go to my GBP listing at [URL] and these competitors: [URL1], [URL2], [URL3]. For each listing, check their GBP posts section and record:   total posts in the last 90 days, post frequency in posts per week on average, post types used (offer/update/event/product), whether posts include images, whether posts include a call to action button, topics and themes
+covered, any seasonal or promotional patterns, and estimated engagement if visible.   Put this in a spreadsheet. Then build me a complete 8-week GBP posting calendar with 2-3 posts per week using a mix of seasonal service promotions, before-and-after project showcases, neighborhood-specific posts mentioning [area1], [area2], [area3], review highlights, team spotlights, and
+educational posts about common problems we solve.   Each post must naturally include at least one of these target keywords: [keyword1], [keyword2], [keyword3], should be 100-150 words with a clear CTA, and include an image description so I know exactly what photo to take. Write the full copy for all posts in weeks 1-4 and give me detailed outlines for weeks 5-8."
+why this matters: the competitor analysis almost always reveals the same thing: nobody's posting.
+consistent posting immediately sets you apart. and neighborhood-specific posts build location relevance that's extremely hard to replicate. every post mentioning a specific area tells Google your business is associated with that neighborhood.
+6. services section optimization
+Google gives you an entire section to list your services with descriptions. this is prime keyword real estate and almost nobody optimizes it. most businesses leave it blank or add services with no descriptions - that's like having a landing page with just a title and no content.
+"Open Chrome and go to my GBP listing at [URL] and these competitors: [URL1], [URL2], [URL3].   For each listing, extract the complete services section including every service listed, whether each service has a description, the full text of each description if present, how descriptions are structured (problem-solution, feature-benefit, or keyword-heavy), which services appear
+in every competitor's listing because those are non-negotiable, and which services appear in some but not all because those are opportunities. Put this in a comparison spreadsheet.   Then audit my current services section against my website at [URL] and identify services on my site that aren't in my GBP, services in my GBP that have no description, and services where my
+description is weaker than competitors.   Finally, write fully optimized descriptions for all my services - each one should be 2-3 sentences and 40-60 words, naturally include the primary service keyword, mention at least one specific service area from [area1], [area2], or [area3], include a specific benefit or outcome the customer gets, and sound like a real business wrote it
+not an SEO tool. Here are my core services: [service1], [service2], [service3], [service4], [service5]."
+why this matters: your services section is one of the only places on your GBP where you control the text completely. reviews are written by customers.   Q&A can come from anyone. but service descriptions? that's your copy, your keywords, your messaging. the cross-reference against your website catches a common mistake - businesses add new services to their site but forget to
+update their GBP. if you do "trenchless sewer repair" but it's not on your GBP, you're invisible for that search in the map pack.
+7. GBP description optimization
+your GBP description is 750 characters of prime real estate. most businesses waste it. they either leave it blank, copy-paste from their website, or stuff it with keywords that sound robotic.
+"Open Chrome and go to my GBP listing at [URL] and these competitors: [URL1], [URL2], [URL3].   Extract each business's full GBP description and put them in a spreadsheet with these columns: business name, full description text, character count, primary keyword used (yes/no and which one), secondary keywords mentioned, service areas mentioned, years in business or trust signals
+mentioned, unique selling points mentioned, CTA included (yes/no and what it says), and overall tone (professional/casual/urgent/local).   Then analyze what ALL top-ranking competitors mention because those are non-negotiable elements, what no one mentions that I could own, and what I'm currently saying that nobody else bothers to say. Finally, write me 3 versions of an
+optimized GBP description each under 750 characters:   Version 1 is keyword-focused with maximum ranking signal where every character is a keyword opportunity; Version 2 is conversion-focused and written to make someone pick up the phone right now; Version 3 is trust-focused and built around years of experience, reviews, and local credibility. All three must include [keyword1],
+[keyword2], [keyword3] and service areas [area1], [area2], [area3]. Make them sound like a human wrote them at 11pm after a long day, not a marketing team."
+why this matters: having 3 versions lets you test. run version 1 for 30 days, check impressions and calls, then try version 2.   most people write one description and forget about it forever. treating it as a testable asset gives you a compounding edge that nobody else in your market is doing.
+8. GBP photo audit
+businesses with photos get 42% more requests for directions and 35% more click-throughs. but it's not just about having photos - it's about the right photos uploaded consistently. most businesses uploaded 10 blurry phone pics three years ago and called it done.
+"Open Chrome and go to my GBP listing at [URL] and these competitors: [URL1], [URL2], [URL3]. For each listing, analyze the photo section completely and record: total photo count, estimated photos uploaded in the last 30 days, estimated photos uploaded in the last 90 days, photo types present (team shots, job site photos, before/after, trucks/vehicles, equipment,
+office/storefront, completed work close-ups), photo quality (professional vs phone shots), whether any look like stock photos, whether photos include people or faces, whether photos show specific neighborhoods or recognizable local landmarks, and average photos per week based on upload frequency.   Put this in a spreadsheet comparing me vs each competitor. Then build me a
+specific 8-week photo upload plan with the exact number of photos to upload per week to beat the top competitor's velocity by 50%, a specific shot list for each week including what to photograph and where and why, which weeks to prioritize before/afters vs team shots vs trucks vs completed installs, a naming convention for photos that includes service keywords and location
+names, and instructions for geotagging photos to specific neighborhoods we serve: [area1], [area2], [area3]. No generic office photos - every photo should be working as a ranking signal."
+why this matters: consistency beats volume. uploading 50 photos in one day then nothing for 6 months tells Google you're not active. uploading 3-5 quality photos every week tells Google your business is alive and thriving. the naming convention and geotagging instructions alone are worth the price of admission - most businesses have no idea photo metadata affects local rankings.
+
+## PART 2: WEBSITE (prompts 9-13)
+9. keyword gap audit
+find every keyword your competitors rank for that you don't. this is where the revenue your website should be generating is hiding.
+"Open Chrome and log into my SEMrush account at semrush. com. Go to the Keyword Gap tool and enter my domain [yourdomain. com] and these 3 competitor domains: [competitor1. com], [competitor2. com], [competitor3. com].   Filter results to show only keywords where competitors rank in positions 1-20 but I don't rank at all and export this list. From that list, filter down further
+to only keywords that meet all of these criteria: monthly search volume between 100 and 2,000 which is the local intent sweet spot, keyword contains at least one of these words: [city name], [service type], 'near me', 'emergency', 'best', 'local', and keyword difficulty under 40. For the top 20 keywords from that filtered list, tell me the current search volume, keyword
+difficulty, which competitors rank for it and at what position, whether I have any existing page that could rank for it with optimization, and whether I need a new page to target it.   Output as a spreadsheet sorted by opportunity score where high volume plus low difficulty plus multiple competitors ranking equals highest priority. Add a final column called 'Action Required'
+that says either 'Optimize existing page' or 'Create new page' for each keyword."
+why this matters: most businesses are invisible for searches their competitors are winning every day. this audit shows you exactly where the revenue gap is and what to do about it. the filtered list removes all the noise and gives you only the keywords worth going after - the ones with real buyer intent and real search volume.
+10. money page audit
+most local business websites have the wrong pages ranking. or no pages ranking at all. this audit fixes that.
+Open Chrome and go to my Google Search Console atsearch.google.com/search-console, log in, and access the property for [yourdomain.com].   Go to Search Results, set the date range to last 3 months, and export all queries and pages. For each page on my site, tell me what keywords it currently ranks for, the average position for each keyword, impressions and clicks for each
+keyword, and whether the page is optimized for the keyword it's ranking for or whether it's ranking accidentally.   Then identify: pages ranking in positions 4-15 for high-value keywords because these need one optimization push to hit top 3, pages with high impressions but low clicks because that's a title and meta description problem, pages with zero rankings because those are
+either dead weight or untapped opportunity, and keywords I'm ranking for on a page that isn't the right page for that keyword because that's a cannibalization issue.   Then build me a priority action list with quick wins being pages to optimize this week for immediate ranking improvement, medium effort being pages to rebuild over the next month, and long term being new pages to
+create over the next 90 days. For each item include the current position, target position, estimated time to see improvement, and exact on-page changes needed."why this matters: most businesses are sitting on page 2 rankings that are one title tag change away from page 1. this audit finds them all and tells you exactly what to fix first - no guesswork, no wasted effort."
+11. service + city page builder
+the fastest way to rank in multiple cities is a dedicated page per service per city. most businesses have one generic service page and wonder why they don't show up in cities 30 minutes away.
+"I need to build location-specific service pages for my website. My primary service is [your main service], the cities I serve are [city1], [city2], [city3], [city4], [city5], my website is [URL], and my target keyword pattern is [service] + [city], [service] near [city], best [service] in [city].   First open Chrome and check my website at [URL] and tell me which city plus
+service combination pages already exist and which are missing.   Then for each missing combination write a fully optimized page that includes: an SEO title under 60 characters that naturally includes service and city, a meta description under 155 characters that includes service and city and a compelling reason to click, an H1 heading with service and city written naturally, an
+opening paragraph of 100 words that addresses the specific pain point of someone in that city needing this service right now, a why choose us section of 150 words specific to that city mentioning local landmarks or neighborhoods or area-specific challenges where relevant, a service details section of 200 words covering what the service includes and what the process looks like
+and what the customer gets, a social proof section with a placeholder for reviews from that city, a FAQ section with 3 questions specific to customers in that city, and a CTA with phone number and 'Call now for same-day service in [city]'.   For each page also give me the exact URL slug, 3 internal linking opportunities from existing pages on my site, and 2 local citations or
+directories where I should list this specific city plus service combination."
+why this matters: Google ranks pages not websites. if you don't have a page specifically about [service] in [city], you will not rank for that search. this prompt builds the entire location page stack in one session - the work that would take a team of writers weeks gets done before lunch.
+12. Google Search Console analysis
+most business owners log into GSC, get overwhelmed, and close the tab. this prompt makes sense of all of it and finds the revenue hiding on page 2.
+Open Chrome and log into Google Search Console atsearch.google.com/search-consolefor my property [yourdomain.com]. Export the last 90 days of search performance data including all queries, all pages, clicks, impressions, CTR, and average position.   Find my page 2 goldmine by identifying every keyword where I rank between position 11 and 20 with at least 100 impressions per
+month - these are my highest priority optimization targets because a jump from position 15 to position 5 is worth more than creating 10 new pages. For each page 2 keyword, open the page that's ranking for it on my site and tell me whether the keyword is in the title tag, whether it's in the H1, whether it's in the first 100 words of the page, how many words the page is, whether
+the page has internal links pointing to it, and what the current meta description says.   Then build me a 30-day optimization sprint where week 1 covers title tag and H1 fixes for the top 10 page 2 keywords, week 2 covers content additions for pages that are too thin (under 500 words), week 3 covers internal linking fixes with exactly which pages should link to which pages, and
+week 4 covers meta description rewrites to fix pages with high impressions but low CTR. For every single fix, write me the exact new copy - don't give me instructions, give me the actual title tag and H1 and meta description I should use."why this matters: page 2 keywords are the lowest hanging fruit in all of SEO. someone is already searching for exactly what you offer -
+you're just one optimization push away from being visible. this prompt finds every single one of them and tells you exactly what to write."
+
+## how to use all prompts
+don't run all at once.   here's the order:
+week 1: load your business context first. then run prompts 1 and 2 (GBP categories and attributes). fastest fixes with the most immediate ranking impact. you could see changes within days.
+week 2: run prompts 3, 4, and 5 (reviews and GBP posts). now you have a review velocity target and a content calendar that runs itself.
+week 3: run prompts 6, 7, and 8 (services, description, photos). your entire GBP is now fully optimized.
+week 4: run prompts 9 and 12 (keyword gap and GSC analysis). now you know exactly which website pages to fix first.
+week 5-6: run prompts 10, 11, and 12 (website audit, city pages, review sentiment). your website and messaging start matching your GBP.
+90 days of consistent execution on this system and you will outrank businesses that have been established for years. i've watched it happen dozens of times.
+
+## the real talk
+90% of people reading this will save it and never run a single prompt. that's just how it goes.
+if you want my team to run this entire system for your business - every audit, every optimization, every month of execution - that's what we do at Alventra Marketing.
+we've helped home services businesses generate hundreds of thousands in new revenue using this exact framework.
+ 
+DM me if you want to talk about it. no pressure. but if you're serious about dominating your local market, the system works.
+now stop reading and go run prompt 1.
+Sarvesh
+Alventramarketing.com

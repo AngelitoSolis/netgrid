@@ -1,0 +1,1819 @@
+import {
+  pgTable,
+  uuid,
+  varchar,
+  text,
+  boolean,
+  integer,
+  decimal,
+  timestamp,
+  date,
+  jsonb,
+  pgEnum,
+  uniqueIndex,
+  index,
+  vector,
+  customType,
+} from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
+
+// Postgres full-text search vector. We never read the raw value back through
+// Drizzle (queries use ts_rank / @@ on it and set it via to_tsvector(...)),
+// so a minimal custom type is enough to reference the column type-safely.
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+export const userRoleEnum = pgEnum("user_role", ["super_admin", "admin", "client"]);
+export const clientStatusEnum = pgEnum("client_status", ["onboarding", "active", "paused", "churned"]);
+export const blogStatusEnum = pgEnum("blog_status", ["active", "paused", "setup", "decommissioned"]);
+export const seoPluginEnum = pgEnum("seo_plugin", ["yoast", "rankmath", "none"]);
+export const platformEnum = pgEnum("platform", ["wordpress", "shopify"]);
+export const shopifyAuthModeEnum = pgEnum("shopify_auth_mode", [
+  "legacy_token",
+  "client_credentials",
+]);
+export const seoCategoryEnum = pgEnum("seo_category", ["meta", "content", "technical", "links", "images", "schema", "performance"]);
+export const issueSeverityEnum = pgEnum("issue_severity", ["critical", "warning", "notice"]);
+export const issueStatusEnum = pgEnum("issue_status", ["detected", "queued", "approved", "applied", "verified", "dismissed", "failed"]);
+export const senderRoleEnum = pgEnum("sender_role", ["admin", "client", "system"]);
+export const seoTrendEnum = pgEnum("seo_trend", ["improving", "stable", "declining"]);
+export const checkTypeEnum = pgEnum("check_type", ["scheduled", "manual"]);
+export const thirdPartySourceEnum = pgEnum("third_party_source", ["ahrefs", "semrush", "moz"]);
+export const generatedPostStatusEnum = pgEnum("generated_post_status", ["pending", "generating", "generated", "publishing", "published", "failed"]);
+export const keywordTargetStatusEnum = pgEnum("keyword_target_status", ["pending", "generating", "generated", "failed", "skipped"]);
+export const dataforseoRunStatusEnum = pgEnum("dataforseo_run_status", ["pending", "success", "failed"]);
+export const scrubberStrictnessEnum = pgEnum("scrubber_strictness", ["loose", "standard", "strict"]);
+export const authorStatusEnum = pgEnum("author_status", [
+  "draft",   // being filled in; never used for a byline
+  "active",  // real, consenting, publishable
+  "retired", // person withdrew consent or left; keep the row for old posts
+]);
+export const compliancePlacementEnum = pgEnum("compliance_placement", [
+  "TOP",
+  "BOTTOM",
+  "TOP_AND_BOTTOM",
+  "INLINE",
+  "ABOUT_ONLY",
+  "ROTATING",
+]);
+export const knowledgeSourceTypeEnum = pgEnum("knowledge_source_type", [
+  "spreadsheet",
+  "csv",
+  "docx",
+  "pdf",
+  "image",
+  "text",
+]);
+export const knowledgeExtractionStatusEnum = pgEnum("knowledge_extraction_status", [
+  "pending",
+  "extracted",
+  "failed",
+]);
+
+// ─── 1. users ────────────────────────────────────────────────────────────────
+
+export const users = pgTable("users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  email: varchar("email", { length: 255 }).notNull().unique(),
+  name: varchar("name", { length: 255 }).notNull(),
+  passwordHash: text("password_hash"),
+  role: userRoleEnum("role").notNull().default("client"),
+  clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+  avatarUrl: text("avatar_url"),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("users_email_idx").on(table.email),
+  index("users_client_id_idx").on(table.clientId),
+]);
+
+// ─── 2. clients ──────────────────────────────────────────────────────────────
+
+export const clients = pgTable("clients", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  contactName: varchar("contact_name", { length: 255 }),
+  contactEmail: varchar("contact_email", { length: 255 }),
+  contactPhone: varchar("contact_phone", { length: 50 }),
+  niche: varchar("niche", { length: 255 }),
+  totalBlogsTarget: integer("total_blogs_target").default(0),
+  notesInternal: text("notes_internal"),
+  // Optional custom generation prompt (client-level default). When set, it
+  // drives article generation for this client's blogs instead of the
+  // Client-wide custom generation prompt. When set, ALL of this client's blogs
+  // are generated from it instead of the niche/persona style. Compliance and
+  // the JSON output contract stay locked regardless.
+  customPrompt: text("custom_prompt"),
+  // When the custom prompt is active, also layer each blog's generated
+  // persona/voice on top of it (instead of the custom prompt fully replacing
+  // the persona). Persona is still per-blog, so each site keeps its own voice.
+  // Off by default — a plain custom prompt keeps replacing the persona.
+  stackPersona: boolean("stack_persona").default(false).notNull(),
+  // Call-to-action button appended to the bottom of every published post for
+  // this client (link to their main site / contact / registration page).
+  ctaEnabled: boolean("cta_enabled").default(false).notNull(),
+  ctaLabel: varchar("cta_label", { length: 80 }),
+  ctaUrl: varchar("cta_url", { length: 1000 }),
+  // Where the button appears: "bottom" | "top_bottom" | "top_middle_bottom".
+  ctaPlacement: varchar("cta_placement", { length: 40 }).default("bottom"),
+  // Preset CTA button color key (see cta-colors.ts). NULL = per-blog derived.
+  ctaColor: varchar("cta_color", { length: 20 }),
+  // Manual seed terms (newline/comma separated) fed to the keyword scraper
+  // alongside the client's niche key-topics. See client_keywords.
+  keywordSeeds: text("keyword_seeds"),
+  // Peptides-only programmatic location pages: target locations (newline/comma
+  // separated) + drip campaign controls. See peptide_location_targets.
+  peptideLocations: text("peptide_locations"),
+  // Optional global dosage list (newline/comma separated) for location pages.
+  peptideDosages: text("peptide_dosages"),
+  locationCampaignEnabled: boolean("location_campaign_enabled").default(false).notNull(),
+  locationPagesPerDay: integer("location_pages_per_day").default(2).notNull(),
+  // Mini registration form injected into posts. On submit it records the lead
+  // and redirects the visitor to registrationRedirectUrl (the client's own
+  // sign-up page). Placement: "top" | "bottom" | "top_bottom".
+  registrationFormEnabled: boolean("registration_form_enabled").default(false).notNull(),
+  registrationRedirectUrl: varchar("registration_redirect_url", { length: 1000 }),
+  registrationFormPlacement: varchar("registration_form_placement", { length: 40 }).default("bottom"),
+  // Post language control: "en" | "fr" | "en_fr" | null.
+  //   en    → all posts English
+  //   fr    → all posts French
+  //   en_fr → posts alternate English / French (strict, per blog)
+  //   null  → legacy derived behaviour (niche / TLD / vertical rules)
+  // When set, overrides the hardcoded niche/TLD language locks.
+  languageMode: varchar("language_mode", { length: 8 }),
+  status: clientStatusEnum("status").default("onboarding"),
+  // Opt-in to the cross-site ABC link-exchange network. Off by default.
+  linkExchangeEnabled: boolean("link_exchange_enabled").default(false).notNull(),
+  // Does this client actually operate somewhere physical — a storefront, a
+  // service area, real local fulfilment? OFF by default and deliberately not
+  // derivable: blogs.city is an operator-assigned string that says where a
+  // SITE is aimed, not that the BUSINESS is there. Only a client with a real
+  // local presence may have its transactional keywords city-framed (see
+  // keyword-targeting.shouldApplyLocalFraming); everyone else gets
+  // keyword-targeted but city-free posts.
+  localPresence: boolean("local_presence").default(false).notNull(),
+  // Keyword-refresh bookkeeping (see actions/keyword-actions.ts, T10,
+  // migration 0046).
+  //   refreshedAt        — last scrape that actually stored keywords.
+  //   refreshAttemptedAt — last attempt, success or not. This is the sharded
+  //                        cron's fairness cursor: candidates are ordered by
+  //                        it, oldest first, and it is stamped BEFORE the
+  //                        scrape so a crash cannot pin a client at the head
+  //                        of the queue forever.
+  //   refreshFailures    — consecutive empty/blocked scrapes; 0 after any
+  //                        success. Drives the activity_log escalation.
+  keywordsRefreshedAt: timestamp("keywords_refreshed_at"),
+  keywordsRefreshAttemptedAt: timestamp("keywords_refresh_attempted_at"),
+  keywordsRefreshFailures: integer("keywords_refresh_failures").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("clients_status_idx").on(table.status),
+  // The refresh candidate query: stalest-first, nulls first.
+  index("clients_keywords_refresh_idx").on(table.keywordsRefreshAttemptedAt),
+]);
+
+// ─── 3. blogs ────────────────────────────────────────────────────────────────
+
+export const blogs = pgTable("blogs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  domain: varchar("domain", { length: 255 }).notNull(),
+  platform: platformEnum("platform").default("wordpress").notNull(),
+  wpUrl: varchar("wp_url", { length: 500 }),
+  wpUsername: varchar("wp_username", { length: 255 }),
+  wpAppPassword: varchar("wp_app_password", { length: 255 }),
+  seoPlugin: seoPluginEnum("seo_plugin").default("none"),
+  // Version reported by the netgrid-seo-bridge MU-plugin's
+  // /wp-json/netgrid/v1/seo-bridge probe, refreshed on every connection test.
+  // NULL = not installed: Yoast's _yoast_wpseo_* meta is NOT REST-writable on
+  // this site, so meta writes there are discarded with a 200. See T14.
+  seoBridgeVersion: varchar("seo_bridge_version", { length: 20 }),
+  shopifyStoreUrl: varchar("shopify_store_url", { length: 500 }),
+  shopifyAdminApiToken: varchar("shopify_admin_api_token", { length: 500 }),
+
+  // Shopify auth & metadata
+  shopifyAuthMode: shopifyAuthModeEnum("shopify_auth_mode").default("client_credentials"),
+  shopifyClientId: varchar("shopify_client_id", { length: 255 }),
+  shopifyClientSecret: varchar("shopify_client_secret", { length: 500 }),
+  shopifyBlogHandle: varchar("shopify_blog_handle", { length: 255 }),
+  shopifyGrantedScopes: text("shopify_granted_scopes"),
+
+  // CANONICAL CADENCE. integer[7]; entry i = posts to publish on ISO weekday
+  // i+1 (1 = Mon ... 7 = Sun), UTC. All-zeros = "not scheduled", which is an
+  // alertable condition (see /api/notifications), never a silent skip.
+  // The publisher and the verification cron both read THIS and nothing else.
+  // See src/lib/posting-plan.ts and migration 0043_posting_plan.sql.
+  postingPlan: integer("posting_plan")
+    .array()
+    .notNull()
+    .default(sql`'{0,0,0,0,0,0,0}'::integer[]`),
+  // -- LEGACY cadence columns. Superseded by postingPlan; retained only so a
+  //    code rollback still has data to read. Dropped by migration 0044.
+  //    Nothing may READ these any more.
+  postingFrequency: varchar("posting_frequency", { length: 50 }),
+  postingFrequencyDays: integer("posting_frequency_days").array(),
+  postsPerDay: integer("posts_per_day"),
+  postingIntervalHours: integer("posting_interval_hours"),
+  lastPostVerifiedAt: timestamp("last_post_verified_at"),
+  lastPostTitle: varchar("last_post_title", { length: 500 }),
+  currentSeoScore: integer("current_seo_score"),
+  lastSeoScanAt: timestamp("last_seo_scan_at"),
+  status: blogStatusEnum("status").default("setup"),
+  notesInternal: text("notes_internal"),
+  // Deprecated per-blog custom generation prompt column. Custom prompts are now
+  // client-wide only (see clients.customPrompt) — this column is retained for
+  // back-compat but is no longer read or written by the app.
+  customPrompt: text("custom_prompt"),
+  // Local keyword-targeted content (see docs/local-keyword-content-plan.md).
+  // city is the feature's on/off switch: null means this blog keeps the
+  // ordinary ideateTopic flow. Assignment is manual — the domain is not a
+  // reliable source of the city (pizzeriacrosta.ca carries none at all).
+  city: varchar("city", { length: 120 }),
+  region: varchar("region", { length: 120 }),
+  countryCode: varchar("country_code", { length: 2 }),
+  // Display name for this blog's own store, e.g. "Montreal Peptides". Null
+  // falls back to a domain-derived label at read time.
+  brandName: varchar("brand_name", { length: 160 }),
+  // Operator-chosen organisational byline, e.g. "Montreal Peptides Editorial".
+  // Used when the blog has no active person author. Setting it is an explicit
+  // per-blog decision to publish unattributed, so it also clears the YMYL
+  // author gate for THIS blog (the narrow form of ALLOW_UNATTRIBUTED_YMYL).
+  orgByline: varchar("org_byline", { length: 160 }),
+  // Shopify homepage SEO — pushed to the shop's global.title_tag /
+  // global.description_tag metafields (same convention as article meta).
+  // Null means "don't touch the shop's existing metafields."
+  homepageMetaTitle: varchar("homepage_meta_title", { length: 70 }),
+  homepageMetaDescription: varchar("homepage_meta_description", { length: 320 }),
+  // The author whose byline this blog publishes under. NULL falls back to the
+  // client's first active author, then to an organisational byline — see
+  // resolveBylineForBlog in services/author-entity.ts.
+  //
+  // NO .references() here ON PURPOSE, and the FK is declared in the migration
+  // instead. `authors.blogId` references `blogs`, so adding the reverse arrow
+  // here makes the two table types mutually recursive and TypeScript gives up:
+  //   TS7022 'blogs' implicitly has type 'any' because it ... is referenced
+  //   directly or indirectly in its own initializer
+  // The deferred arrow defers the VALUE, not the TYPE. Since drizzle-kit is not
+  // the source of truth in this repo (migrations are hand-written SQL — see
+  // db/migrate.mjs), the constraint lives in 0052 and the database enforces it
+  // exactly as if it were declared here. The relations block below still
+  // navigates it.
+  defaultAuthorId: uuid("default_author_id"),
+  // ── IndexNow (see docs/indexnow/README.md) ───────────────────────────
+  // Per-blog key. NEVER shared across the network: the key file is public at
+  // a guessable URL on this domain, so one key across N domains is a one-GET
+  // membership test for the whole network.
+  indexnowKey: varchar("indexnow_key", { length: 128 }),
+  // Absolute URL where THIS blog serves its key file. Normally
+  // https://{domain}/{indexnowKey}.txt — the spec scopes a key file to its
+  // own directory, so it has to be at the root for post URLs to be covered.
+  // Operator-overridable for sites fronted by an edge rule.
+  indexnowKeyLocation: varchar("indexnow_key_location", { length: 1000 }),
+  // Last time we fetched indexnowKeyLocation and got back HTTP 200,
+  // text/plain, body === key. Null means "never verified".
+  indexnowKeyVerifiedAt: timestamp("indexnow_key_verified_at"),
+  // ── Google Search Console sitemap submission ─────────────────────────
+  sitemapUrl: varchar("sitemap_url", { length: 1000 }),
+  sitemapSubmittedAt: timestamp("sitemap_submitted_at"),
+  sitemapSubmitError: text("sitemap_submit_error"),
+  // ── Google Search Console (T04) ──
+  // gscSiteUrl is the property identifier every Search Console call is made
+  // with. Two shapes, decided by the verification method:
+  //   "sc-domain:example.com"  Domain property   (DNS_TXT verified)
+  //   "https://example.com/"   URL-prefix property (META verified)
+  // Null until the property is verified AND registered via sites.add.
+  gscSiteUrl: varchar("gsc_site_url", { length: 255 }),
+  // "DNS_TXT" | "META". Chosen by platform — see gsc-verifier.methodForBlog.
+  gscVerificationMethod: varchar("gsc_verification_method", { length: 16 }),
+  // The token Google handed back. For DNS_TXT this IS the operator
+  // deliverable (the TXT value to publish at the apex); for META it is the
+  // full <meta> tag we wrote into the theme.
+  gscVerificationToken: text("gsc_verification_token"),
+  gscVerifiedAt: timestamp("gsc_verified_at"),
+  gscSitemapSubmittedAt: timestamp("gsc_sitemap_submitted_at"),
+  // Last successful searchanalytics pull. Drives the sync cron's ordering
+  // (NULLS FIRST = never-synced blogs jump the queue) and lets the alert
+  // distinguish "suppressed site" from "broken cron".
+  gscLastSyncedAt: timestamp("gsc_last_synced_at"),
+  // Stamped when the 16-month historical pull completed for this blog, so
+  // the backfill mode can be re-run to completion without redoing work.
+  gscBackfilledAt: timestamp("gsc_backfilled_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("blogs_domain_idx").on(table.domain),
+  index("blogs_client_id_idx").on(table.clientId),
+  index("blogs_status_idx").on(table.status),
+  // Partial index: the sync cron's candidate query is
+  //   status = 'active' AND gsc_verified_at IS NOT NULL
+  // over the whole table, every run, on every shard.
+  index("blogs_gsc_synced_idx").on(table.gscLastSyncedAt),
+]);
+
+// ─── 4. seo_scans ───────────────────────────────────────────────────────────
+
+export const seoScans = pgTable("seo_scans", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  overallScore: integer("overall_score").notNull(),
+  metaScore: integer("meta_score").notNull(),
+  contentScore: integer("content_score").notNull(),
+  technicalScore: integer("technical_score").notNull(),
+  linkScore: integer("link_score").notNull(),
+  imageScore: integer("image_score").notNull(),
+  pagesCrawled: integer("pages_crawled").default(0),
+  issuesFound: integer("issues_found").default(0),
+  criticalIssues: integer("critical_issues").default(0),
+  warnings: integer("warnings").default(0),
+  notices: integer("notices").default(0),
+  rawData: jsonb("raw_data"),
+  scanDurationMs: integer("scan_duration_ms"),
+  scannedAt: timestamp("scanned_at").defaultNow().notNull(),
+}, (table) => [
+  index("seo_scans_blog_id_idx").on(table.blogId),
+  index("seo_scans_client_id_idx").on(table.clientId),
+  index("seo_scans_scanned_at_idx").on(table.scannedAt),
+]);
+
+// ─── 5. seo_issues ──────────────────────────────────────────────────────────
+
+export const seoIssues = pgTable("seo_issues", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  scanId: uuid("scan_id").notNull().references(() => seoScans.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  pageUrl: varchar("page_url", { length: 1000 }),
+  category: seoCategoryEnum("category").notNull(),
+  severity: issueSeverityEnum("severity").notNull(),
+  title: varchar("title", { length: 500 }).notNull(),
+  description: text("description"),
+  suggestedFix: text("suggested_fix"),
+  fixPayload: jsonb("fix_payload"),
+  status: issueStatusEnum("status").default("detected"),
+  approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
+  approvedAt: timestamp("approved_at"),
+  appliedAt: timestamp("applied_at"),
+  verifiedAt: timestamp("verified_at"),
+  failureReason: text("failure_reason"),
+  autoFixable: boolean("auto_fixable").default(false),
+  detectedAt: timestamp("detected_at").defaultNow().notNull(),
+  resolvedAt: timestamp("resolved_at"),
+  /** Stable detector identity for GSC-loop issues ('page2:<normQuery>',
+   * 'split:<normQuery>'...). NULL = legacy row managed by the per-post scanner,
+   * which only deletes keyless detected/queued rows (migration 0056 guard). */
+  issueKey: varchar("issue_key", { length: 255 }),
+  /** BEFORE measurement snapshot for GSC-loop issues; S1-verify writes
+   * .outcome into it — the before/after proof layer (F8: no delta without both
+   * measurements present). */
+  preSnapshot: jsonb("pre_snapshot"),
+}, (table) => [
+  index("seo_issues_blog_id_idx").on(table.blogId),
+  index("seo_issues_client_id_idx").on(table.clientId),
+  index("seo_issues_status_idx").on(table.status),
+  index("seo_issues_severity_idx").on(table.severity),
+]);
+
+// ─── 6. post_verifications ──────────────────────────────────────────────────
+
+export const postVerifications = pgTable("post_verifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  checkType: checkTypeEnum("check_type").default("scheduled"),
+  latestPostDate: timestamp("latest_post_date"),
+  latestPostTitle: varchar("latest_post_title", { length: 500 }),
+  latestPostUrl: varchar("latest_post_url", { length: 1000 }),
+  postsInPeriod: integer("posts_in_period").default(0),
+  expectedPosts: integer("expected_posts").default(0),
+  onSchedule: boolean("on_schedule").default(true),
+  daysSinceLastPost: integer("days_since_last_post"),
+  alertTriggered: boolean("alert_triggered").default(false),
+  checkedAt: timestamp("checked_at").defaultNow().notNull(),
+}, (table) => [
+  index("post_verifications_blog_id_idx").on(table.blogId),
+  index("post_verifications_client_id_idx").on(table.clientId),
+]);
+
+// ─── 8. messages ─────────────────────────────────────────────────────────────
+
+export const messages = pgTable("messages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  senderId: uuid("sender_id").references(() => users.id, { onDelete: "set null" }),
+  senderRole: senderRoleEnum("sender_role").notNull(),
+  content: text("content").notNull(),
+  isInternal: boolean("is_internal").default(false),
+  attachments: jsonb("attachments"),
+  readByClient: boolean("read_by_client").default(false),
+  readByAdmin: boolean("read_by_admin").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("messages_client_id_idx").on(table.clientId),
+  index("messages_sender_id_idx").on(table.senderId),
+]);
+
+// ─── 9. reports ──────────────────────────────────────────────────────────────
+
+export const reports = pgTable("reports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  periodStart: date("period_start").notNull(),
+  periodEnd: date("period_end").notNull(),
+  title: varchar("title", { length: 255 }),
+  summaryHtml: text("summary_html"),
+  overallSeoTrend: seoTrendEnum("overall_seo_trend"),
+  avgSeoScore: integer("avg_seo_score"),
+  totalPostsPublished: integer("total_posts_published"),
+  totalIssuesFixed: integer("total_issues_fixed"),
+  blogsOnSchedule: integer("blogs_on_schedule"),
+  blogsOffSchedule: integer("blogs_off_schedule"),
+  // Generation cost (text + images) for posts created during the report's
+  // period. Computed at report-generation time; null on reports generated
+  // before this column existed.
+  totalCostUsd: decimal("total_cost_usd", { precision: 10, scale: 6 }),
+  highlights: jsonb("highlights"),
+  concerns: jsonb("concerns"),
+  rawData: jsonb("raw_data"),
+  visibleToClient: boolean("visible_to_client").default(false),
+  generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  publishedAt: timestamp("published_at"),
+}, (table) => [
+  index("reports_client_id_idx").on(table.clientId),
+]);
+
+// ─── 11. seo_third_party_data ───────────────────────────────────────────────
+
+export const seoThirdPartyData = pgTable("seo_third_party_data", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  source: thirdPartySourceEnum("source").notNull(),
+  domainAuthority: integer("domain_authority"),
+  backlinksTotal: integer("backlinks_total"),
+  referringDomains: integer("referring_domains"),
+  organicKeywords: integer("organic_keywords"),
+  organicTrafficEst: integer("organic_traffic_est"),
+  topKeywords: jsonb("top_keywords"),
+  rawResponse: jsonb("raw_response"),
+  fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+}, (table) => [
+  index("seo_third_party_blog_id_idx").on(table.blogId),
+  index("seo_third_party_client_id_idx").on(table.clientId),
+]);
+
+// ─── blog_vitals ────────────────────────────────────────────────────────────
+// Lab Core Web Vitals for a blog's ARTICLE template, sampled from one
+// representative published post via PageSpeed Insights.
+//
+// Sampled PER BLOG, not per post, on purpose: LCP, CLS and TBT are decided by
+// the theme, the image pipeline and the host, all of which are constant across
+// a blog's articles. Per-post sampling would cost ~1000x more PSI calls for
+// noise. Every post on a blog reads the newest row here for its vitals
+// component; a sample older than 90 days is treated as no sample at all.
+
+export const blogVitals = pgTable("blog_vitals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  strategy: varchar("strategy", { length: 10 }).default("mobile").notNull(),
+  // The exact URL that was audited — a real article URL when the blog has one,
+  // otherwise the site root. Recorded so a surprising number can be reproduced.
+  sampledUrl: varchar("sampled_url", { length: 1000 }).notNull(),
+  lcpMs: integer("lcp_ms"),
+  fcpMs: integer("fcp_ms"),
+  // CLS x 1000 (0.084 is stored as 84). See clsX1000() in pagespeed-client.ts:
+  // an integer column silently rounds real CLS values to zero otherwise.
+  clsX1000: integer("cls_x1000"),
+  tbtMs: integer("tbt_ms"),
+  // Populated only if PSI ever emits a lab INP audit. Expect null.
+  inpMs: integer("inp_ms"),
+  speedIndexMs: integer("speed_index_ms"),
+  lighthousePerformance: integer("lighthouse_performance"),
+  // Set when the PSI call itself failed. A row with an error and null metrics
+  // is deliberate: it records that we tried, so the cron does not retry this
+  // blog every single night, and the reason is visible.
+  error: text("error"),
+  fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+}, (table) => [
+  index("blog_vitals_blog_id_idx").on(table.blogId),
+  index("blog_vitals_fetched_at_idx").on(table.fetchedAt),
+]);
+
+// ─── generated_posts ────────────────────────────────────────────────────────
+
+export const generatedPosts = pgTable("generated_posts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  topic: varchar("topic", { length: 500 }).notNull(),
+  keywords: jsonb("keywords"),
+  // The demand-validated candidate query this post was built to cover, copied
+  // verbatim from the ranked pool. Null on the ungrounded fallback path (a
+  // client with no scraped keywords yet) and on posts predating T11 — that
+  // null-rate IS the grounding-coverage metric.
+  primaryQuery: varchar("primary_query", { length: 255 }),
+  // 3-6 real sub-questions the article is required to answer, chosen by
+  // ideation from the same query pool. Persisted here as an audit trail;
+  // consumed by the article prompt (T05).
+  supportingQueries: jsonb("supporting_queries"),
+  title: varchar("title", { length: 500 }),
+  body: text("body"),
+  excerpt: text("excerpt"),
+  metaTitle: varchar("meta_title", { length: 255 }),
+  metaDescription: text("meta_description"),
+  featuredImageUrl: text("featured_image_url"),
+  // Second image — a deliberately differently-framed shot of the same
+  // topic, embedded into the body HTML at roughly the midpoint by
+  // content-generator.ts. Stored separately from featuredImageUrl so
+  // we can reuse it (e.g. for social cards) without re-extracting from
+  // the body. Always a data: URI when present.
+  bodyImageUrl: text("body_image_url"),
+  wordCount: integer("word_count"),
+  // ── Quality score (T19) ──
+  // seoScore is the ONE composite score. Null = not measured; it must render
+  // as "n/a", never as a number. Written after publication by
+  // lib/services/post-quality-score.ts, never at generation time.
+  seoScore: integer("seo_score"),
+  // No implementation exists for either of these. They stay null until one
+  // does — see AnalysisScores in lib/services/content-generator.ts.
+  readabilityScore: integer("readability_score"),
+  brandVoiceScore: integer("brand_voice_score"),
+  // Full component breakdown for the score above: per-component weight, score,
+  // and the reason a component was skipped. This is what makes a score
+  // defensible to a client and debuggable to us — a bare number that nobody
+  // can explain is how we got here. Shape: QualityBreakdown in
+  // lib/services/quality/score.ts.
+  qualityBreakdown: jsonb("quality_breakdown"),
+  qualityScoredAt: timestamp("quality_scored_at"),
+  // Highest cosine similarity found against any OTHER published post
+  // (0.0000-1.0000). Promoted out of the jsonb so it can be queried and
+  // indexed directly.
+  maxSiblingSimilarity: decimal("max_sibling_similarity", { precision: 5, scale: 4 }),
+  tokensUsed: integer("tokens_used"),
+  costUsd: decimal("cost_usd", { precision: 10, scale: 6 }),
+  status: generatedPostStatusEnum("status").default("pending").notNull(),
+  // Concrete language this post was written in ("en" | "fr"), recorded at
+  // generation time. Drives strict EN/FR alternation for bilingual clients
+  // (flip the blog's most recent post language) and serves as an audit trail.
+  language: varchar("language", { length: 2 }),
+  failureReason: text("failure_reason"),
+  externalPostId: varchar("external_post_id", { length: 100 }),
+  externalPostUrl: varchar("external_post_url", { length: 1000 }),
+  isAutoGenerated: boolean("is_auto_generated").default(false),
+  // Scrubber audit trail. Shape mirrors ScrubberReport in
+  // src/lib/content/scrubber/types.ts; jsonb so we can GROUP BY violation
+  // kinds without locking the report shape in DDL.
+  scrubberReport: jsonb("scrubber_report"),
+  flaggedForReview: boolean("flagged_for_review").default(false).notNull(),
+  // ── Semantic linking (pgvector) ──
+  // Dense embedding of title + sanitized body, used for cosine-similarity
+  // "related posts" linking. text-embedding-3-small → 1536 dims. Null until
+  // the post has been embedded (see semantic-linking service).
+  embedding: vector("embedding", { dimensions: 1536 }),
+  // Which model produced `embedding` — lets us re-embed only stale rows if we
+  // ever change models/dimensions.
+  embeddingModel: varchar("embedding_model", { length: 64 }),
+  embeddedAt: timestamp("embedded_at"),
+  // Sparse (full-text) half of the hybrid linking score. Maintained in app
+  // code from the same sanitized title+body we embed. See semantic-linking.
+  searchTsv: tsvector("search_tsv"),
+  // The related posts most recently linked into this post, as
+  // [{ id, title, url }]. Mirrors what was written into the live body block
+  // and the Shopify custom.netgrid_related_posts metafield.
+  relatedPosts: jsonb("related_posts"),
+  relatedLinkedAt: timestamp("related_linked_at"),
+  // ── SEO meta verification (T14) ──
+  // WordPress returns 200 for meta writes it silently discards, so a 2xx is
+  // not proof. This is what the LIVE page rendered after the write:
+  //   true  - the live <head> matched what we wrote
+  //   false - the page was fetched and did NOT match
+  //   null  - never checked (Shopify, a draft, or the page was unreachable)
+  seoMetaVerified: boolean("seo_meta_verified"),
+  seoMetaVerifiedAt: timestamp("seo_meta_verified_at"),
+  generatedAt: timestamp("generated_at"),
+  publishedAt: timestamp("published_at"),
+  // ── Auto-publish idempotency (T08) ──
+  // publishDay is the UTC calendar day this row CLAIMS a publishing slot
+  // on, as 'YYYY-MM-DD' (Drizzle maps a Postgres `date` to a string — same
+  // convention as reports.periodStart). daySlot is which slot inside that
+  // day, 0-based: a blog configured "2x per day" legitimately claims slots
+  // 0 and 1 (see parsePostsPerDay / isBlogDueForPost).
+  //
+  // Written ONLY by the auto-publish path (runGenerateAndPublish with
+  // isAutoGenerated). Manual generation from the admin UI leaves both null,
+  // and NULLs never collide in a unique index, so an operator can always
+  // add an extra post by hand. Every pre-T08 row is null too, which is why
+  // the unique index below can be created against a history that already
+  // contains same-day duplicates.
+  publishDay: date("publish_day"),
+  daySlot: integer("day_slot"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("generated_posts_blog_id_idx").on(table.blogId),
+  index("generated_posts_client_id_idx").on(table.clientId),
+  index("generated_posts_status_idx").on(table.status),
+  index("generated_posts_created_at_idx").on(table.createdAt),
+  index("generated_posts_seo_meta_verified_idx").on(
+    table.blogId,
+    table.seoMetaVerified,
+  ),
+  // THE idempotency guard. At most one row may occupy a given
+  // (blog, UTC day, slot) while it is in flight or live. A row that fails
+  // drops out of the predicate and frees its slot for a retry; 'generated'
+  // (written but the platform publish failed) is also outside the
+  // predicate, so a failed publish does not burn the day. This is what
+  // makes /api/cron/auto-publish safe to invoke twice.
+  uniqueIndex("generated_posts_blog_day_slot_uniq")
+    .on(table.blogId, table.publishDay, table.daySlot)
+    .where(sql`${table.status} in ('generating', 'publishing', 'published')`),
+  // Drives the stuck-row reaper (reapStuckPublishes).
+  index("generated_posts_inflight_idx")
+    .on(table.status, table.updatedAt)
+    .where(sql`${table.status} in ('generating', 'publishing')`),
+]);
+
+// ─── style_profiles ─────────────────────────────────────────────────────────
+// One per blog. Built by the 14-phase assignment algorithm at blog creation.
+// Locked after assignment — never re-rolled automatically. Field IDs reference
+// the library files in src/lib/content/libraries/*.
+
+export const styleProfiles = pgTable("style_profiles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" })
+    .unique(),
+  // Future-proofing for non-peptide expansions. Currently always "peptides".
+  nicheKey: varchar("niche_key", { length: 64 }).notNull().default("peptides"),
+
+  // Locked stylistic core (referencing the libraries by integer ID)
+  subNicheId: integer("sub_niche_id").notNull(),
+  voiceId: integer("voice_id").notNull(),
+  skeletonId: integer("skeleton_id").notNull(),
+  cadenceId: integer("cadence_id").notNull(),
+  quirks: integer("quirks").array().notNull(),
+  schemaId: integer("schema_id").notNull(),
+  tagSetId: integer("tag_set_id").notNull(),
+  citationStyleId: integer("citation_style_id").notNull(),
+
+  // Per-post draws
+  structuralPool: integer("structural_pool").array().notNull(),
+
+  // Compliance
+  compliancePhraseIds: integer("compliance_phrase_ids").array().notNull(),
+  compliancePlacement: compliancePlacementEnum("compliance_placement").notNull(),
+
+  // Operational
+  wordBandMin: integer("word_band_min").notNull(),
+  wordBandMax: integer("word_band_max").notNull(),
+  scrubberStrictness: scrubberStrictnessEnum("scrubber_strictness")
+    .notNull()
+    .default("standard"),
+
+  // Niche content
+  primaryCompounds: text("primary_compounds").array().notNull(),
+  secondaryCompounds: text("secondary_compounds").array().notNull(),
+
+  // Audit
+  assignmentSeed: varchar("assignment_seed", { length: 64 }),
+  // Hamming distance from the closest existing profile at the moment
+  // this profile was assigned. Computed as sum of integer single-valued
+  // mismatches (0-8) + 3 Jaccard distances (0.0-1.0 each), so the
+  // realistic range is 0.00-11.00. Stored as decimal because Jaccard
+  // produces fractional values (e.g. 9.55 means 8 single-valued
+  // mismatches + ~1.55 fractional set-distance).
+  minHammingAtAssign: decimal("min_hamming_at_assign", { precision: 5, scale: 2 }),
+  // Phase 3: optional LLM-generated per-blog persona. Shape mirrors
+  // GeneratedPersona in src/lib/content/persona-generator.ts. When present,
+  // composeForPost uses it for the voice slots instead of the library voice —
+  // a unique generated voice per blog. Null → use the library voiceId
+  // (behavior unchanged). generatedPersonaSeed keeps the operator's seed inputs
+  // so the persona can be regenerated with the same direction.
+  generatedPersona: jsonb("generated_persona"),
+  generatedPersonaSeed: text("generated_persona_seed"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("style_profiles_blog_id_idx").on(table.blogId),
+  index("style_profiles_sub_niche_idx").on(table.subNicheId),
+  index("style_profiles_voice_idx").on(table.voiceId),
+]);
+
+// ─── 11b. niche_profiles ────────────────────────────────────────────────────
+// Auto-generated niche definitions for client niches NOT hardcoded in
+// src/lib/content/libraries/niches.ts. Created once (LLM) when a client with a
+// new niche is added, cached in memory at runtime, and reused like the
+// built-in niches. `key` is the normalized niche key (e.g. "restaurant").
+export const nicheProfiles = pgTable("niche_profiles", {
+  key: varchar("key", { length: 80 }).primaryKey(),
+  name: varchar("name", { length: 160 }).notNull(),
+  audience: text("audience").notNull(),
+  brandVoice: text("brand_voice").notNull(),
+  contentStyle: text("content_style").notNull(),
+  requirements: text("requirements").notNull(),
+  keyTopics: text("key_topics").array().notNull(),
+  primaryTerms: text("primary_terms").array().notNull(),
+  adjacentTerms: text("adjacent_terms").array().notNull(),
+  source: varchar("source", { length: 24 }).notNull().default("generated"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ─── 11c. authors ───────────────────────────────────────────────────────────
+//
+// A REAL, CONSENTING PERSON who is named as the author of published content.
+//
+// This table exists because a byline has to resolve to something. Before T12
+// the Shopify byline was a hash of the store handle over a 30x30 table of
+// invented names (services/shopify-client.ts) and the WordPress byline was
+// whichever account held the application password. Neither is an entity: there
+// is no page to link to, no profile to corroborate against, and nothing for a
+// search engine to merge into a knowledge-graph node.
+//
+// HARD RULE — every row must correspond to a living person who has agreed to
+// be named. `credentials` is for qualifications that are documented in
+// `credential_evidence_url`; it is never a place to write an aspiration. If no
+// real person is available for a YMYL blog, publish under an organisational
+// byline (no row here) or stop publishing that content — do not invent a row.
+// See SOP T12 and services/author-entity.ts.
+//
+// blog_id is nullable, mirroring knowledge_documents: NULL means the author is
+// available to every blog of the client; set means the author belongs to one
+// blog only.
+export const authors = pgTable("authors", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").references(() => blogs.id, { onDelete: "cascade" }),
+
+  // ── Identity ──
+  name: varchar("name", { length: 160 }).notNull(),
+  // URL-safe handle; drives /pages/author-{slug} (Shopify) and the WP page slug.
+  slug: varchar("slug", { length: 160 }).notNull(),
+  bio: text("bio").notNull(),
+  jobTitle: varchar("job_title", { length: 160 }),
+  photoUrl: text("photo_url"),
+  email: varchar("email", { length: 255 }),
+
+  // ── Corroboration ──
+  // Real qualifications only, each evidenced by credentialEvidenceUrl. Emitted
+  // as schema.org EducationalOccupationalCredential. Empty array is fine and
+  // is the correct value for most authors.
+  credentials: text("credentials").array().notNull(),
+  // Absolute URLs on THIRD-PARTY domains that corroborate this person
+  // (LinkedIn, ORCID, a university page, a professional register). A sameAs
+  // pointing at another netgrid property is worse than none — it makes the
+  // network self-referential. Emitted as schema.org sameAs.
+  sameAs: text("same_as").array().notNull(),
+  credentialEvidenceUrl: text("credential_evidence_url"),
+
+  // ── Consent (the compliance gate) ──
+  // A row is only publishable when consentGivenAt is set. consentRecordUrl
+  // points at the signed agreement / email thread on file.
+  consentGivenAt: timestamp("consent_given_at"),
+  consentRecordUrl: text("consent_record_url"),
+
+  // ── Platform identity, filled in by services/author-entity.ts ──
+  // WordPress user id whose byline this author uses (createPost sends it as
+  // `author`). Null when the app-password account lacks create_users /
+  // edit_others_posts — the post then keeps the API account's byline.
+  wpUserId: integer("wp_user_id"),
+  // Absolute URL of the published author page on the blog's own domain. This
+  // becomes the JSON-LD author @id and url.
+  authorPageUrl: varchar("author_page_url", { length: 1000 }),
+  authorPagePublishedAt: timestamp("author_page_published_at"),
+
+  status: authorStatusEnum("status").notNull().default("draft"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("authors_client_id_idx").on(table.clientId),
+  index("authors_blog_id_idx").on(table.blogId),
+  index("authors_status_idx").on(table.status),
+  // Slug must be unique per blog. Postgres treats NULLs as distinct, so this
+  // index does NOT constrain client-wide authors — the partial index in the
+  // migration covers those.
+  uniqueIndex("authors_blog_slug_idx").on(table.blogId, table.slug),
+]);
+
+// ─── 12. activity_log ───────────────────────────────────────────────────────
+
+export const activityLog = pgTable("activity_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+  clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+  action: varchar("action", { length: 100 }).notNull(),
+  entityType: varchar("entity_type", { length: 50 }),
+  entityId: uuid("entity_id"),
+  details: jsonb("details"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("activity_log_user_id_idx").on(table.userId),
+  index("activity_log_client_id_idx").on(table.clientId),
+  index("activity_log_created_at_idx").on(table.createdAt),
+]);
+
+// ─── cron_runs ──────────────────────────────────────────────────────────────
+//
+// One row per cron invocation (T22). This is the durable replacement for
+// returning AutoPublishResult to a curl: the counters land here whether or
+// not anyone reads the HTTP response, and they survive container restarts.
+//
+// Deliberately NOT foreign-keyed (same convention as link_events, see
+// migrations/0026_link_events.sql) — a telemetry write must never fail
+// because a blog or client row moved underneath it.
+export const cronRuns = pgTable("cron_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  /** Job name, e.g. "auto-publish", "post-verification", "alerts". */
+  job: varchar("job", { length: 64 }).notNull(),
+  /** 0-based shard index, or null when the job is not sharded. */
+  shardIndex: integer("shard_index"),
+  shardCount: integer("shard_count"),
+  startedAt: timestamp("started_at").notNull(),
+  finishedAt: timestamp("finished_at").defaultNow().notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  /** false when the run body threw. */
+  ok: boolean("ok").default(true).notNull(),
+  /** RunCounters — see src/lib/services/run-telemetry.ts. jsonb so the
+   * counter set can grow without a migration. */
+  counters: jsonb("counters").notNull(),
+  /** Total pipeline_errors recorded during this run (including any
+   * dropped past the in-memory buffer cap). */
+  errorCount: integer("error_count").default(0).notNull(),
+  /** First 25 errors inline, so the run row alone is readable. */
+  errorSample: jsonb("error_sample"),
+  fatalError: text("fatal_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("cron_runs_job_started_idx").on(table.job, table.startedAt),
+  index("cron_runs_started_at_idx").on(table.startedAt),
+]);
+
+// ─── pipeline_errors ────────────────────────────────────────────────────────
+//
+// One row per typed failure. Replaces the ~131 console.warn/console.error
+// dead-ends. Normalised (rather than only living inside cron_runs.errors)
+// so "how many META_WRITE_FAILED across how many distinct blogs in the
+// last 24h" is one indexed query, and so failures outside a cron run
+// (manual Generate now, /r/ redirect, webhook) are captured too.
+export const pipelineErrors = pgTable("pipeline_errors", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  /** cron_runs.id when inside a run; null for ad-hoc failures. */
+  runId: uuid("run_id"),
+  job: varchar("job", { length: 64 }).notNull(),
+  /** Code location, e.g. "content-generator.images". */
+  site: varchar("site", { length: 64 }).notNull(),
+  /** PipelineErrorCode — see run-telemetry.ts. */
+  code: varchar("code", { length: 64 }).notNull(),
+  /** "warn" | "error" | "fatal". */
+  severity: varchar("severity", { length: 16 }).default("error").notNull(),
+  blogId: uuid("blog_id"),
+  clientId: uuid("client_id"),
+  postId: uuid("post_id"),
+  message: text("message").notNull(),
+  context: jsonb("context"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("pipeline_errors_created_at_idx").on(table.createdAt),
+  index("pipeline_errors_code_created_idx").on(table.code, table.createdAt),
+  index("pipeline_errors_blog_id_idx").on(table.blogId),
+  index("pipeline_errors_run_id_idx").on(table.runId),
+]);
+
+// ─── alert_log / alert_suppression ──────────────────────────────────────────
+//
+// alert_log is the audit trail of everything the alerter tried to send
+// (including delivery failures). alert_suppression is the per-key cooldown
+// claim: alert_key is the PRIMARY KEY, so the conditional upsert in
+// pipeline-alerts.ts is atomic across the four concurrently-running
+// auto-publish shards without needing a transaction (the neon-http driver
+// has none).
+export const alertLog = pgTable("alert_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  alertKey: varchar("alert_key", { length: 160 }).notNull(),
+  severity: varchar("severity", { length: 16 }).notNull(),
+  subject: varchar("subject", { length: 300 }).notNull(),
+  body: text("body").notNull(),
+  delivered: boolean("delivered").default(false).notNull(),
+  deliveryError: text("delivery_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("alert_log_key_created_idx").on(table.alertKey, table.createdAt),
+  index("alert_log_created_idx").on(table.createdAt),
+]);
+
+export const alertSuppression = pgTable("alert_suppression", {
+  alertKey: varchar("alert_key", { length: 160 }).primaryKey(),
+  suppressedUntil: timestamp("suppressed_until").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ─── news_items ─────────────────────────────────────────────────────────────
+//
+// Cached headlines fetched from Google News RSS (and optional NewsAPI /
+// GNews fallbacks) keyed by vertical. The auto-publish ideation step
+// reads recent rows for the blog's vertical so Claude can brainstorm
+// topics tied to current local/international news instead of cold.
+//
+// Rows are immutable: the refresh cron upserts on (verticalKey, link)
+// so duplicates from multiple queries on the same vertical collapse.
+
+export const newsItems = pgTable("news_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  verticalKey: varchar("vertical_key", { length: 64 }).notNull(),
+  // The query string that surfaced this item (one vertical may run
+  // several queries — one per topic angle / location). Useful for
+  // attribution and for skipping stale queries during re-fetch.
+  query: varchar("query", { length: 256 }).notNull(),
+  // Source label: "google_news_rss" | "newsapi" | "gnews".
+  source: varchar("source", { length: 32 }).notNull(),
+  // Publisher (e.g. "CBC News", "Le Devoir"). Optional — RSS sometimes
+  // omits it.
+  publisher: varchar("publisher", { length: 128 }),
+  title: varchar("title", { length: 512 }).notNull(),
+  link: varchar("link", { length: 1024 }).notNull(),
+  snippet: text("snippet"),
+  language: varchar("language", { length: 8 }),
+  country: varchar("country", { length: 8 }),
+  publishedAt: timestamp("published_at"),
+  fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+  // True once the row has been surfaced to an ideation prompt —
+  // optional dedupe signal so the same headline doesn't seed
+  // back-to-back topics on the same blog.
+  usedInIdeation: boolean("used_in_ideation").default(false).notNull(),
+  raw: jsonb("raw"),
+}, (table) => [
+  index("news_items_vertical_idx").on(table.verticalKey),
+  index("news_items_fetched_at_idx").on(table.fetchedAt),
+  index("news_items_published_at_idx").on(table.publishedAt),
+  uniqueIndex("news_items_vertical_link_uk").on(table.verticalKey, table.link),
+]);
+
+// ─── knowledge_documents ──────────────────────────────────────────────────────
+//
+// Per-client Knowledge Base. The team uploads briefs, keyword sheets, brand
+// guides, etc.; each file is normalised to Markdown at upload time (see
+// services/knowledge-converter.ts) and run through a one-time extraction pass
+// (services/knowledge-extractor.ts) that distills keywords, topics, and a
+// summary. Ideation and generation later read the active rows for a blog/client
+// so Claude works from the client's actual material instead of generic niche
+// keyword lists.
+//
+// blogId is nullable: when set, the document is scoped to a single blog; when
+// null it applies to the whole client (shared across all its blogs).
+
+export const knowledgeDocuments = pgTable("knowledge_documents", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").references(() => blogs.id, { onDelete: "cascade" }),
+  fileName: varchar("file_name", { length: 500 }).notNull(),
+  contentType: varchar("content_type", { length: 150 }),
+  sourceType: knowledgeSourceTypeEnum("source_type").notNull(),
+  // Normalised Markdown body — the canonical form fed to Claude.
+  markdown: text("markdown").notNull(),
+  charCount: integer("char_count").notNull().default(0),
+  // True when extraction produced suspiciously little text (e.g. a scanned
+  // PDF with no text layer) — surfaced for manual review.
+  lowConfidence: boolean("low_confidence").notNull().default(false),
+  warnings: jsonb("warnings"), // string[] of non-fatal conversion notes
+  // Distilled knowledge from the one-time extraction pass.
+  extractedKeywords: jsonb("extracted_keywords"), // string[]
+  extractedTopics: jsonb("extracted_topics"), // string[]
+  summary: text("summary"),
+  extractionStatus: knowledgeExtractionStatusEnum("extraction_status")
+    .notNull()
+    .default("pending"),
+  extractionError: text("extraction_error"),
+  // Whether this document should be consulted during ideation/generation.
+  isActive: boolean("is_active").notNull().default(true),
+  uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("knowledge_documents_client_id_idx").on(table.clientId),
+  index("knowledge_documents_blog_id_idx").on(table.blogId),
+  index("knowledge_documents_active_idx").on(table.isActive),
+]);
+
+// ─── niches ───────────────────────────────────────────────────────────────────
+//
+// The editable, per-niche generation config. Phase 0 of the content-config
+// rebuild: these rows are SEEDED from the currently-hardcoded niche rules in
+// content-generator.ts (NICHE_CONTEXTS + getNicheRequirements) so ops can review
+// and edit them in the admin "Niches" screen. Generation still reads the code
+// path in Phase 0 — this table is a shadow copy until the composer is switched
+// over to read from it.
+//
+// `key` matches normalizeNicheKey() output (e.g. "peptides", "tax_lawyer"), so a
+// blog's free-text clients.niche resolves to a row by the same normalization.
+
+export const niches = pgTable("niches", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  key: varchar("key", { length: 100 }).notNull().unique(),
+  label: varchar("label", { length: 255 }).notNull(),
+  industry: varchar("industry", { length: 255 }).notNull(),
+  defaultAudience: text("default_audience"),
+  defaultBrandVoice: text("default_brand_voice"),
+  // The long "contentStyle" directive (voice/approach) that goes into the prompt.
+  contentStyle: text("content_style"),
+  // string[] — topical anchors used by ideation + generation.
+  keyTopics: jsonb("key_topics"),
+  // The per-niche writing-requirements block (getNicheRequirements).
+  requirements: text("requirements"),
+  // string[] — compliance/legal disclaimers (locked layer; mostly empty at seed
+  // time since today's disclaimers live in the peptide/gambling phrase library).
+  disclaimers: jsonb("disclaimers"),
+  // Optional niche-level word-count override (per-blog band still wins today).
+  wordBandMin: integer("word_band_min"),
+  wordBandMax: integer("word_band_max"),
+  // Provenance: "seed" = mirrored from code, "manual" = hand-edited in the UI,
+  // "imported" = extracted from an uploaded file (Phase 2). Lets re-sync skip
+  // hand-edited rows so it never clobbers ops changes.
+  source: varchar("source", { length: 20 }).notNull().default("seed"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("niches_key_idx").on(table.key),
+]);
+
+// ─── client_keywords ──────────────────────────────────────────────────────────
+//
+// Auto-scraped keyword sets bound to a client's content generation. Discovered
+// per client from the client's niche key-topics + manual seeds (see
+// keyword-scraper.ts). When active, the top-ranked keywords are merged into the
+// ideation keyword pool so every generated post targets them.
+//
+// searchVolume / cpc are nullable — Google Autocomplete supplies neither, but
+// the columns keep the store ready for volume-bearing providers so ranking can
+// use real volume without a schema change. For volume-less sources, hitCount
+// (how many seed queries surfaced the term) + bestPosition act as the ranking
+// proxy.
+
+export const clientKeywords = pgTable("client_keywords", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  keyword: varchar("keyword", { length: 200 }).notNull(),
+  searchVolume: integer("search_volume"),
+  cpc: decimal("cpc", { precision: 10, scale: 2 }),
+  source: varchar("source", { length: 32 }).notNull().default("google_autocomplete"),
+  hitCount: integer("hit_count").notNull().default(1),
+  bestPosition: integer("best_position"),
+  isActive: boolean("is_active").notNull().default(true),
+  fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+  // DataForSEO fields — nullable, populated only for source='dataforseo' rows.
+  // Autocomplete rows never touch these. See migrations/0037.
+  keywordDifficulty: integer("keyword_difficulty"),
+  competition: decimal("competition", { precision: 6, scale: 4 }),
+  lowTopOfPageBid: decimal("low_top_of_page_bid", { precision: 10, scale: 2 }),
+  highTopOfPageBid: decimal("high_top_of_page_bid", { precision: 10, scale: 2 }),
+  monthlySearches: jsonb("monthly_searches"),
+  mainIntent: varchar("main_intent", { length: 32 }),
+  locationCode: integer("location_code"),
+  raw: jsonb("raw"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("client_keywords_client_keyword_idx").on(table.clientId, table.keyword),
+  index("client_keywords_client_active_idx").on(table.clientId, table.isActive),
+]);
+
+// ─── dataforseo_runs ────────────────────────────────────────────────────────
+//
+// One row per (client, seed) DataForSEO pull — cost tracking and debugging,
+// kept separate from the keyword data itself (which lands in client_keywords
+// above). A run's cost is real money, unlike the free Autocomplete scrape.
+
+export const dataforseoRuns = pgTable("dataforseo_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  seed: varchar("seed", { length: 200 }).notNull(),
+  endpoint: varchar("endpoint", { length: 120 }).notNull(),
+  locationCode: integer("location_code").notNull(),
+  languageCode: varchar("language_code", { length: 16 }).notNull(),
+  status: dataforseoRunStatusEnum("status").notNull().default("pending"),
+  itemsReturned: integer("items_returned").notNull().default(0),
+  cost: decimal("cost", { precision: 10, scale: 4 }),
+  error: text("error"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+}, (table) => [
+  index("dataforseo_runs_client_idx").on(table.clientId, table.startedAt),
+]);
+
+// ─── peptide_location_targets ─────────────────────────────────────────────────
+//
+// Peptides-only programmatic long-tail location pages. One row = one
+// (blog compound × client location) page. A campaign builds the matrix as
+// "pending" rows; a daily drip cron generates up to the client's
+// locationPagesPerDay per blog as full unique articles through the normal
+// generator, so aggressive coverage rolls out slowly rather than as a burst of
+// thin doorway pages.
+
+export const peptideLocationTargets = pgTable("peptide_location_targets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  compound: varchar("compound", { length: 120 }).notNull(),
+  location: varchar("location", { length: 160 }).notNull(),
+  // Optional dosage ('' = none). Part of the uniqueness key.
+  dosage: varchar("dosage", { length: 40 }).notNull().default(""),
+  // Templated title used as the generation topic (query-targeted).
+  title: varchar("title", { length: 500 }).notNull(),
+  // "pending" | "generated" | "failed"
+  status: varchar("status", { length: 16 }).notNull().default("pending"),
+  generatedPostId: uuid("generated_post_id").references(() => generatedPosts.id, {
+    onDelete: "set null",
+  }),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  generatedAt: timestamp("generated_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("peptide_location_targets_unique_idx").on(
+    table.blogId,
+    table.compound,
+    table.dosage,
+    table.location,
+  ),
+  index("peptide_location_targets_blog_status_idx").on(table.blogId, table.status),
+  index("peptide_location_targets_client_idx").on(table.clientId),
+]);
+
+// ─── blog_keyword_targets ──────────────────────────────────────────────────────
+//
+// Local keyword-targeted content ledger. One row = one candidate "[keyword] in
+// [city]" post for a blog — pairing the blog's assigned city (blogs.city) with
+// one of its own scraped keywords (client_keywords). Built by
+// buildKeywordTargetsForBlog() whenever the blog has a city; claimed by
+// runAutoPublishCron in priority order, one claim per due blog per run. See
+// docs/local-keyword-content-plan.md.
+//
+// Niche-agnostic and strictly additive: a blog with no city never gets rows
+// here and keeps today's ideateTopic flow untouched. Same shape as
+// peptide_location_targets (which this table eventually unifies with), except
+// keyed on a real scraped keyword instead of a client-picked compound.
+
+export const blogKeywordTargets = pgTable("blog_keyword_targets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  keyword: varchar("keyword", { length: 255 }).notNull(),
+  // Snapshot of blogs.city at build time — kept even if the blog's city is
+  // later reassigned, so historical rows still describe what was targeted.
+  city: varchar("city", { length: 120 }).notNull(),
+  topicTitle: varchar("topic_title", { length: 500 }).notNull(),
+  status: keywordTargetStatusEnum("status").notNull().default("pending"),
+  // Rank snapshot at build time (lower = higher priority). Real search
+  // volume once the DataForSEO corpus lands; the Autocomplete popularity
+  // proxy (hitCount/bestPosition ordering) until then.
+  priority: integer("priority").notNull().default(0),
+  keywordSource: varchar("keyword_source", { length: 32 }).notNull().default("google_autocomplete"),
+  searchVolume: integer("search_volume"),
+  // What searchVolume above actually describes. 'target_keyword' = this row's
+  // keyword IS the query the number was measured for. 'bare_keyword' = the row
+  // is city-framed, so the number is the BARE keyword's national volume and
+  // says nothing about "keyword + city" (DataForSEO is pulled at country-level
+  // location codes only; see dataforseo-actions.localeForLanguageMode).
+  volumeScope: varchar("volume_scope", { length: 16 }),
+  // Winnability score of the representative keyword at build time. Snapshot,
+  // like searchVolume — kept so a re-rank doesn't rewrite history.
+  winnability: decimal("winnability", { precision: 12, scale: 4 }),
+  // DataForSEO 0-100 organic difficulty of the representative. Null on
+  // Autocomplete-only rows, which is most of them — and will stay most of them
+  // for a long time at the approved DataForSEO budget.
+  keywordDifficulty: integer("keyword_difficulty"),
+  // Whether this target is written as a CITY page. False = keyword-targeted
+  // but city-free (informational/comparison intent, or a client with no real
+  // local presence). The city column above stays populated either way as the
+  // build-time snapshot and as part of the uniqueness key.
+  localFraming: boolean("local_framing").notNull().default(true),
+  // The intent-scoped cluster this row represents (keyword-clustering.ts).
+  clusterKey: varchar("cluster_key", { length: 255 }),
+  // Near-duplicate keyword variants folded into this one target — string[].
+  // Passed to the generator as secondary keywords so ONE post covers all of
+  // them instead of one near-identical post per variant.
+  variants: jsonb("variants"),
+  generatedPostId: uuid("generated_post_id").references(() => generatedPosts.id, {
+    onDelete: "set null",
+  }),
+  failureReason: text("failure_reason"),
+  // Bounded retry lifecycle (T10, migration 0046).
+  //   attempts     — resolved failures INCLUDING reaper requeues. The row is
+  //                  dead-lettered to 'failed' once this reaches
+  //                  KEYWORD_TARGET_MAX_ATTEMPTS. Before T10, 'failed' was set
+  //                  on the FIRST failure while the claim query only ever
+  //                  selected 'pending' and nothing reset it — so one
+  //                  transient model error permanently deleted that keyword
+  //                  from that blog.
+  //   lastAttemptAt— diagnostics; not read by the claim query.
+  //   nextRetryAt  — cool-off gate. NULL = claimable now (never attempted, or
+  //                  terminal).
+  attempts: integer("attempts").notNull().default(0),
+  lastAttemptAt: timestamp("last_attempt_at"),
+  nextRetryAt: timestamp("next_retry_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  generatedAt: timestamp("generated_at"),
+}, (table) => [
+  uniqueIndex("blog_keyword_targets_unique_idx").on(table.blogId, table.keyword, table.city),
+  index("blog_keyword_targets_blog_status_priority_idx").on(table.blogId, table.status, table.priority),
+  index("blog_keyword_targets_client_idx").on(table.clientId),
+  // The claim query is now (blog_id, status='pending', next_retry_at gate)
+  // ORDER BY attempts, priority — the index above no longer covers it.
+  index("blog_keyword_targets_claim_idx").on(
+    table.blogId,
+    table.status,
+    table.nextRetryAt,
+    table.attempts,
+    table.priority,
+  ),
+  // The reaper: status='generating' AND updated_at < cutoff, network-wide.
+  index("blog_keyword_targets_stranded_idx").on(table.status, table.updatedAt),
+]);
+
+// ─── blog_covered_queries ─────────────────────────────────────────────────────
+//
+// PERMANENT per-blog record of which search queries a blog has already
+// covered. This replaces the 24-title dedup window (getRecentTitles: 12 own +
+// 12 sibling titles) that ideation used to rely on — a window that made a
+// two-year-old blog forget everything older than about two weeks and re-cover
+// the same subjects indefinitely.
+//
+// One row = "this blog has published a post whose subject is this query".
+// query_norm is normalizeQueryKey(query) (see content/topic-similarity.ts) and
+// is the uniqueness key, so accent/case/hyphen/spacing variants of the same
+// query collapse to one row. Written by recordCoveredQuery() after a post is
+// published (auto-publish) or persisted (manual generate); read by
+// getIdeationCandidatesForBlog() to remove already-covered queries from the
+// candidate list BEFORE the model ever sees them.
+//
+// client_id is denormalised from the blog so sibling blogs of the same client
+// can be consulted cheaply (a query a sibling already covered is
+// deprioritised, not removed — see getIdeationCandidatesForBlog).
+export const blogCoveredQueries = pgTable("blog_covered_queries", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  // The query exactly as it appeared in the candidate list / ledger row.
+  query: varchar("query", { length: 255 }).notNull(),
+  // normalizeQueryKey(query) — the dedup key. Never write this by hand in SQL;
+  // always go through the TS helper so the runtime and any backfill agree.
+  queryNorm: varchar("query_norm", { length: 255 }).notNull(),
+  // The angle/title actually published for this query. Fed back into the
+  // similarity corpus so a future post can't re-word an old angle either.
+  topic: varchar("topic", { length: 500 }).notNull(),
+  generatedPostId: uuid("generated_post_id").references(() => generatedPosts.id, {
+    onDelete: "set null",
+  }),
+  // "ideation" | "ledger" | "backfill" — where the coverage came from.
+  source: varchar("source", { length: 16 }).notNull().default("ideation"),
+  coveredAt: timestamp("covered_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("blog_covered_queries_blog_query_idx").on(table.blogId, table.queryNorm),
+  index("blog_covered_queries_client_query_idx").on(table.clientId, table.queryNorm),
+  index("blog_covered_queries_blog_covered_at_idx").on(table.blogId, table.coveredAt),
+]);
+
+// ─── registration_leads ───────────────────────────────────────────────────────
+//
+// Leads captured by the per-client mini registration form injected into posts.
+// The form POSTs to /api/register/{blogId}, which stores a row here and then
+// redirects the visitor to the client's own registration page.
+
+export const registrationLeads = pgTable("registration_leads", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").references(() => blogs.id, { onDelete: "set null" }),
+  postId: uuid("post_id").references(() => generatedPosts.id, { onDelete: "set null" }),
+  name: varchar("name", { length: 255 }),
+  location: varchar("location", { length: 255 }),
+  email: varchar("email", { length: 320 }),
+  referrer: varchar("referrer", { length: 2000 }),
+  userAgent: varchar("user_agent", { length: 1000 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("registration_leads_client_created_idx").on(table.clientId, table.createdAt),
+  index("registration_leads_blog_idx").on(table.blogId),
+]);
+
+// ─── Relations ──────────────────────────────────────────────────────────────
+
+export const usersRelations = relations(users, ({ one }) => ({
+  client: one(clients, { fields: [users.clientId], references: [clients.id] }),
+}));
+
+export const clientsRelations = relations(clients, ({ many }) => ({
+  blogs: many(blogs),
+  users: many(users),
+  messages: many(messages),
+  reports: many(reports),
+  activityLogs: many(activityLog),
+  knowledgeDocuments: many(knowledgeDocuments),
+  authors: many(authors),
+}));
+
+export const blogsRelations = relations(blogs, ({ one, many }) => ({
+  client: one(clients, { fields: [blogs.clientId], references: [clients.id] }),
+  seoScans: many(seoScans),
+  seoIssues: many(seoIssues),
+  postVerifications: many(postVerifications),
+  thirdPartyData: many(seoThirdPartyData),
+  generatedPosts: many(generatedPosts),
+  knowledgeDocuments: many(knowledgeDocuments),
+  styleProfile: one(styleProfiles, {
+    fields: [blogs.id],
+    references: [styleProfiles.blogId],
+  }),
+  defaultAuthor: one(authors, {
+    fields: [blogs.defaultAuthorId],
+    references: [authors.id],
+  }),
+}));
+
+export const authorsRelations = relations(authors, ({ one }) => ({
+  client: one(clients, { fields: [authors.clientId], references: [clients.id] }),
+  blog: one(blogs, { fields: [authors.blogId], references: [blogs.id] }),
+}));
+
+export const styleProfilesRelations = relations(styleProfiles, ({ one }) => ({
+  blog: one(blogs, { fields: [styleProfiles.blogId], references: [blogs.id] }),
+}));
+
+export const knowledgeDocumentsRelations = relations(knowledgeDocuments, ({ one }) => ({
+  client: one(clients, { fields: [knowledgeDocuments.clientId], references: [clients.id] }),
+  blog: one(blogs, { fields: [knowledgeDocuments.blogId], references: [blogs.id] }),
+  uploadedByUser: one(users, { fields: [knowledgeDocuments.uploadedBy], references: [users.id] }),
+}));
+
+export const generatedPostsRelations = relations(generatedPosts, ({ one }) => ({
+  blog: one(blogs, { fields: [generatedPosts.blogId], references: [blogs.id] }),
+  client: one(clients, { fields: [generatedPosts.clientId], references: [clients.id] }),
+}));
+
+export const seoScansRelations = relations(seoScans, ({ one, many }) => ({
+  blog: one(blogs, { fields: [seoScans.blogId], references: [blogs.id] }),
+  client: one(clients, { fields: [seoScans.clientId], references: [clients.id] }),
+  issues: many(seoIssues),
+}));
+
+export const seoIssuesRelations = relations(seoIssues, ({ one }) => ({
+  scan: one(seoScans, { fields: [seoIssues.scanId], references: [seoScans.id] }),
+  blog: one(blogs, { fields: [seoIssues.blogId], references: [blogs.id] }),
+  client: one(clients, { fields: [seoIssues.clientId], references: [clients.id] }),
+  approvedByUser: one(users, { fields: [seoIssues.approvedBy], references: [users.id] }),
+}));
+
+export const postVerificationsRelations = relations(postVerifications, ({ one }) => ({
+  blog: one(blogs, { fields: [postVerifications.blogId], references: [blogs.id] }),
+  client: one(clients, { fields: [postVerifications.clientId], references: [clients.id] }),
+}));
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  client: one(clients, { fields: [messages.clientId], references: [clients.id] }),
+  sender: one(users, { fields: [messages.senderId], references: [users.id] }),
+}));
+
+export const reportsRelations = relations(reports, ({ one }) => ({
+  client: one(clients, { fields: [reports.clientId], references: [clients.id] }),
+}));
+
+export const seoThirdPartyDataRelations = relations(seoThirdPartyData, ({ one }) => ({
+  blog: one(blogs, { fields: [seoThirdPartyData.blogId], references: [blogs.id] }),
+  client: one(clients, { fields: [seoThirdPartyData.clientId], references: [clients.id] }),
+}));
+
+export const activityLogRelations = relations(activityLog, ({ one }) => ({
+  user: one(users, { fields: [activityLog.userId], references: [users.id] }),
+  client: one(clients, { fields: [activityLog.clientId], references: [clients.id] }),
+}));
+
+// ─── app_settings ────────────────────────────────────────────────────────────
+// Operator-global key/value settings (e.g. which model powers content
+// generation vs SEO fixes). One row per key; values are stored as text and
+// parsed by typed getters in @/lib/settings/app-settings.
+export const appSettings = pgTable("app_settings", {
+  key: varchar("key", { length: 64 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ─── ops_reply_keys (396red) ─────────────────────────────────────────────────
+// Idempotency for POST /api/v1/ops/threads/{clientId}/reply. Not a lead store.
+export const opsReplyKeys = pgTable("ops_reply_keys", {
+  idempotencyKey: varchar("idempotency_key", { length: 80 }).primaryKey(),
+  clientId: uuid("client_id").notNull(),
+  messageId: uuid("message_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ─── link_events ─────────────────────────────────────────────────────────────
+// Append-only traffic log for netgrid-tracked links on published posts:
+//   type "view"      → a tracking-pixel hit (page view)
+//   type "cta_click" → the CTA redirect (/r/{postId}) was followed
+// Not FK-constrained so the log survives post/blog deletion. Ids are stored
+// loosely (nullable) for the same reason.
+// ─── link_exchange_loops / link_exchange_edges ──────────────────────────────
+// RETIRED (T03). Read-only history of the link-exchange scheme. A "loop" row
+// was one client's FULL MESH (every site linking to every other site it owns —
+// NOT the ABC cycle the original comment described); each edge is one directed
+// link with its anchor and placement record.
+// Statuses now in use: "pending" (legacy), "placed", "failed",
+//   "disabled" (never placed, terminated by migration 0041),
+//   "removed"  (was live, stripped by the removal job).
+export const linkExchangeLoops = pgTable("link_exchange_loops", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  // One loop per client — the client's full mesh of interlinked sites.
+  clientId: uuid("client_id").references(() => clients.id, { onDelete: "cascade" }),
+  niche: varchar("niche", { length: 255 }),
+  size: integer("size").default(3).notNull(),
+  status: varchar("status", { length: 16 }).default("active").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("link_exchange_loops_status_idx").on(table.status),
+  index("link_exchange_loops_client_idx").on(table.clientId),
+]);
+
+export const linkExchangeEdges = pgTable("link_exchange_edges", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  loopId: uuid("loop_id").notNull().references(() => linkExchangeLoops.id, { onDelete: "cascade" }),
+  sourceBlogId: uuid("source_blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  targetBlogId: uuid("target_blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  position: integer("position").default(0).notNull(),
+  anchorText: varchar("anchor_text", { length: 255 }).notNull(),
+  // "branded" | "naked" | "generic" | "partial" | "exact"
+  anchorType: varchar("anchor_type", { length: 16 }).notNull(),
+  targetUrl: varchar("target_url", { length: 1000 }),
+  // "pending" | "placed" | "failed"
+  status: varchar("status", { length: 16 }).default("pending").notNull(),
+  placedInPostId: uuid("placed_in_post_id").references(() => generatedPosts.id, { onDelete: "set null" }),
+  placedAt: timestamp("placed_at"),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("link_exchange_edges_pair_idx").on(table.sourceBlogId, table.targetBlogId),
+  index("link_exchange_edges_loop_idx").on(table.loopId),
+  index("link_exchange_edges_status_idx").on(table.status),
+  index("link_exchange_edges_source_idx").on(table.sourceBlogId),
+]);
+
+// ─── link_exchange_removals ─────────────────────────────────────────────────
+// Durable work queue for the T03 link-exchange teardown. One row per published
+// post that must be checked for a `data-nx-exch` link left behind by the
+// retired exchange. All progress lives here rather than in memory, so the
+// removal job is restartable, idempotent and observable in SQL.
+//
+//   priority 0 → a placed edge points at this post: it is known to carry a link
+//   priority 1 → swept in because its blog ever hosted an exchange link
+//   status     → "pending" | "clean" | "removed" | "failed"
+//
+// previous_body holds the exact live body as it was BEFORE the strip, so a
+// single post can be restored (see restoreRemovedPost). Null it out once the
+// drain has been signed off.
+export const linkExchangeRemovals = pgTable("link_exchange_removals", {
+  postId: uuid("post_id")
+    .primaryKey()
+    .references(() => generatedPosts.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  priority: integer("priority").default(1).notNull(),
+  status: varchar("status", { length: 16 }).default("pending").notNull(),
+  linksRemoved: integer("links_removed").default(0).notNull(),
+  attempts: integer("attempts").default(0).notNull(),
+  lastError: text("last_error"),
+  previousBody: text("previous_body"),
+  checkedAt: timestamp("checked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("link_exchange_removals_queue_idx").on(table.status, table.priority),
+  index("link_exchange_removals_blog_idx").on(table.blogId),
+]);
+
+export const linkEvents = pgTable("link_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  postId: uuid("post_id"),
+  blogId: uuid("blog_id"),
+  clientId: uuid("client_id"),
+  type: varchar("type", { length: 16 }).notNull(),
+  referrer: text("referrer"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("link_events_post_idx").on(table.postId, table.type),
+  index("link_events_blog_idx").on(table.blogId, table.type),
+  index("link_events_client_idx").on(table.clientId, table.type),
+  index("link_events_created_idx").on(table.createdAt),
+]);
+
+// ─── search_performance ──────────────────────────────────────────────────────
+//
+// Google Search Console performance rows: one per (blog x date x query x page).
+// Pulled by /api/cron/gsc-sync from searchanalytics.query and UPSERTED, so
+// re-running a window is idempotent — which matters because Google keeps
+// revising the most recent ~3 days after first publishing them.
+//
+// `date` is a Search Console date: America/Los_Angeles, NOT UTC. See
+// gscToday() in gsc-sync.ts — asking for a UTC "today" returns an empty day
+// for eight hours out of every twenty-four.
+//
+// `position` is the average SERP position for that row, fractional exactly as
+// Google returns it (e.g. 13.47). Stored as numeric, not a float, so AVG()
+// across millions of rows is exact and comparable between runs. Drizzle
+// returns numeric as a string — see the insert in gsc-sync.upsertRows.
+//
+// `ctr` is deliberately absent: it is exactly clicks / impressions and storing
+// it would create a second source of truth for one division.
+//
+// `rowHash` = sha256(query || '\0' || page), computed AFTER truncation so the
+// hash always describes what is actually stored. It exists for one reason: a
+// btree index entry cannot exceed ~2,704 bytes, and (query, page) in UTF-8
+// can. A natural unique index on (blog_id, date, query, page) would work for
+// months and then abort an entire 500-row upsert batch the first time one long
+// URL arrives. Hashing makes the key a fixed 64 bytes. query and page are
+// still stored verbatim and are still queryable.
+export const searchPerformance = pgTable("search_performance", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  date: date("date", { mode: "string" }).notNull(),
+  query: varchar("query", { length: 500 }).notNull(),
+  page: varchar("page", { length: 2048 }).notNull(),
+  rowHash: varchar("row_hash", { length: 64 }).notNull(),
+  clicks: integer("clicks").notNull().default(0),
+  impressions: integer("impressions").notNull().default(0),
+  position: decimal("position", { precision: 6, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  // The upsert conflict target. Also serves every lookup prefixed by
+  // (blog_id) or (blog_id, date), which is why there is no separate
+  // blog_id/date index below — it would be redundant.
+  uniqueIndex("search_performance_unique_idx").on(table.blogId, table.date, table.rowHash),
+  index("search_performance_client_date_idx").on(table.clientId, table.date),
+  index("search_performance_date_idx").on(table.date),
+  index("search_performance_query_idx").on(table.query),
+]);
+
+// ─── index_coverage ──────────────────────────────────────────────────────────
+//
+// Latest Search Console URL-inspection verdict per published post. One row per
+// post, overwritten in place — this is a current-state table, not a log,
+// because URL Inspection is the scarcest quota we have (10,000 calls/day per
+// Cloud project) and history is not worth spending it on.
+//
+//   verdict:       PASS | PARTIAL | FAIL | NEUTRAL | VERDICT_UNSPECIFIED
+//   coverageState: the human string, e.g. "Submitted and indexed",
+//                  "Crawled - currently not indexed",
+//                  "Discovered - currently not indexed",
+//                  "URL is unknown to Google",
+//                  "Duplicate without user-selected canonical"
+//
+// googleCanonical vs userCanonical is the single most diagnostic pair in this
+// table: when they disagree, Google has folded the page into another URL,
+// which is exactly the "indexed but demoted" state the platform could not
+// previously see. Every column here comes back in the SAME response as
+// verdict, so storing them costs no extra quota. `raw` keeps the untouched
+// payload (same convention as client_keywords.raw / seo_scans.rawData) so
+// reprocessing never means re-spending an inspection.
+export const indexCoverage = pgTable("index_coverage", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  postId: uuid("post_id").notNull().references(() => generatedPosts.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  // The URL actually sent to Google, snapshotted — generated_posts.external_post_url
+  // can be rewritten later and we need to know what this verdict describes.
+  inspectedUrl: varchar("inspected_url", { length: 2048 }).notNull(),
+  verdict: varchar("verdict", { length: 32 }),
+  coverageState: varchar("coverage_state", { length: 160 }),
+  robotsTxtState: varchar("robots_txt_state", { length: 48 }),
+  indexingState: varchar("indexing_state", { length: 48 }),
+  pageFetchState: varchar("page_fetch_state", { length: 48 }),
+  googleCanonical: varchar("google_canonical", { length: 2048 }),
+  userCanonical: varchar("user_canonical", { length: 2048 }),
+  lastCrawlTime: timestamp("last_crawl_time"),
+  raw: jsonb("raw"),
+  lastCheckedAt: timestamp("last_checked_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("index_coverage_post_idx").on(table.postId),
+  index("index_coverage_blog_verdict_idx").on(table.blogId, table.verdict),
+  index("index_coverage_checked_idx").on(table.lastCheckedAt),
+  index("index_coverage_client_idx").on(table.clientId),
+]);
+
+// ─── index_ping_events ───────────────────────────────────────────────────────
+// Append-only record of every attempt to tell a search engine about our
+// content. This exists because the previous implementation reported failure
+// with console.warn only, which made a 100% failure rate indistinguishable
+// from a 100% success rate from every operator surface.
+//
+//   channel "indexnow"        -> a POST to api.indexnow.org
+//   channel "indexnow_deploy" -> making/verifying the key file on the domain
+//   channel "gsc_sitemap"     -> a Search Console sitemaps.submit
+//
+//   outcome "ok"      -> the engine accepted it
+//   outcome "failed"  -> we tried and it was rejected / errored
+//   outcome "skipped" -> we deliberately did not try (unsupported platform,
+//                        kill switch, missing credentials). Not an alert.
+export const indexPingEvents = pgTable("index_ping_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  postId: uuid("post_id").references(() => generatedPosts.id, {
+    onDelete: "set null",
+  }),
+  channel: varchar("channel", { length: 24 }).notNull(),
+  outcome: varchar("outcome", { length: 16 }).notNull(),
+  targetUrl: varchar("target_url", { length: 1000 }),
+  keyLocation: varchar("key_location", { length: 1000 }),
+  httpStatus: integer("http_status"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("index_ping_events_blog_idx").on(table.blogId, table.channel),
+  index("index_ping_events_outcome_idx").on(table.outcome, table.createdAt),
+  index("index_ping_events_created_idx").on(table.createdAt),
+]);
+
+// ─── site_profiles (dre22sept) ───────────────────────────────────────────────
+// One row per blog. Operator-entered facts only. A local page must not be
+// generated from the city string alone — see content/site-profile.ts.
+// signature_facts and does_not are string[]. Empty stays empty.
+export const siteProfiles = pgTable("site_profiles", {
+  blogId: uuid("blog_id")
+    .primaryKey()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  neighborhood: varchar("neighborhood", { length: 160 }),
+  signatureFacts: jsonb("signature_facts").notNull().default([]),
+  doesNot: jsonb("does_not").notNull().default([]),
+  placeNote: text("place_note"),
+  // S3 — optional multi-area support (migration 0057): operator-filled extra
+  // service areas, string[]. Same local gate applies per area. Null/absent on
+  // blogs that never filled it in; readers must treat it as an empty list.
+  additionalAreas: jsonb("additional_areas"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("site_profiles_client_idx").on(table.clientId),
+]);
+
+// ─── location_page_targets (SEO loop, S3 — migration 0057) ────────────────────
+// "One page per [service]+[place]" ledger. Services and places come from REAL
+// data only (existing sources — see services/location-matrix.ts); the shared
+// target claimer in actions/content-generation-actions.ts claims one pending
+// row per due blog per run, ordered (priority asc, last_attempt_at asc NULLS
+// FIRST) — that ordering is the neighborhood rotation. status reuses
+// keyword_target_status; skipped rows carry their reason in `error`.
+export const locationPageTargets = pgTable("location_page_targets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  /** Normalized commercial service term (dedupe key part). */
+  serviceKey: varchar("service_key", { length: 255 }).notNull(),
+  /** A REAL place from existing sources only — never geocoded or invented. */
+  placeName: varchar("place_name", { length: 160 }).notNull(),
+  /** "<service> <place>" — the query this page targets (display + dedupe). */
+  combinedQuery: varchar("combined_query", { length: 400 }).notNull(),
+  status: keywordTargetStatusEnum("status").notNull().default("pending"),
+  /** Rank snapshot of the service term's winnability — lower is earlier. */
+  priority: integer("priority").notNull().default(0),
+  /** Fairness cursor for rotation; also the failed-row cool-off anchor. */
+  lastAttemptAt: timestamp("last_attempt_at"),
+  /** Skip reason ('no_local_presence' | 'already_covered:<key>' | ...). */
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("location_page_targets_unique_idx").on(table.blogId, table.serviceKey, table.placeName),
+  index("location_page_targets_claim_idx").on(
+    table.blogId,
+    table.status,
+    table.priority,
+    table.lastAttemptAt,
+  ),
+  index("location_page_targets_client_idx").on(table.clientId),
+]);
+
+// ─── client_seo_dossiers (SEO loop, S6) ──────────────────────────────────────
+// One row per client: the operator-verified fact sheet every generated artifact
+// is grounded in. Prompts render missing fields as "not provided — do not
+// invent" — never fill gaps with guesses. competitorProfiles holds S4's pasted
+// GBP data; recentWins is machine-fed by resolved rescues + sprint outcomes.
+export const clientSeoDossiers = pgTable("client_seo_dossiers", {
+  clientId: uuid("client_id")
+    .primaryKey()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  /** What they actually sell & how — operator-verified. */
+  businessModel: text("business_model"),
+  /** REAL places only (B.5 sources) — string[]. */
+  serviceArea: jsonb("service_area").notNull().default([]),
+  /** From site_profiles.signatureFacts + knowledge base — string[]. */
+  differentiators: jsonb("differentiators").notNull().default([]),
+  /** Who buys, what they fear, what they compare us to. */
+  audience: text("audience"),
+  /** S4 pasted competitor GBP data lives HERE (one home for "what we know about this client's world"). */
+  competitorProfiles: jsonb("competitor_profiles").notNull().default([]),
+  /** Resolved rescues + sprint outcomes (S1-verify feeds this). */
+  recentWins: jsonb("recent_wins").notNull().default([]),
+  /** Honest "we do not know" list — prompts must print it as a gap. */
+  gaps: text("gaps"),
+  /** Freshness stamp; stale (>90d) dossiers say so in output. Every edit stamps it. */
+  lastVerifiedAt: timestamp("last_verified_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ─── gbp_assets + gbp_description_versions (SEO loop, S4) ────────────────────
+// Copy-paste-ready Google Business Profile packs. Netgrid never edits a GBP
+// (F2): these rows are the operator's call script. gbp_assets is INSERT-only —
+// re-generating after a new competitor paste creates NEW rows; old rows are the
+// audit trail of what we promised. The description A/B rotation lives in
+// gbp_description_versions with the 750-char cap enforced in code AND by DB
+// CHECK (migration 0058).
+export const gbpAssets = pgTable("gbp_assets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  /** categories|attributes|services|description|posts|photos|reviews */
+  assetType: varchar("asset_type", { length: 32 }).notNull(),
+  payload: jsonb("payload").notNull(),
+  /** ready | sent_to_client */
+  status: varchar("status", { length: 16 }).notNull().default("ready"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("gbp_assets_client_created_idx").on(table.clientId, table.createdAt),
+]);
+
+export const gbpDescriptionVersions = pgTable("gbp_description_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  body: varchar("body", { length: 750 }).notNull(),
+  /** When the operator confirms this version went live on the GBP. */
+  appliedAt: timestamp("applied_at"),
+  /** Brand-query GSC impressions delta — only when that data exists (F8). */
+  performanceNote: text("performance_note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("gbp_description_versions_client_version_key").on(
+    table.clientId,
+    table.version,
+  ),
+]);
+
+// ─── story_uses (dre22sept) ──────────────────────────────────────────────────
+// One row per time a sourced story was attached to a post. The cap is
+// enforced in content/story-reuse.ts before insert: 5 uses / 30 days, and
+// never two uses of the same story on the same normalised query.
+export const storyUses = pgTable("story_uses", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  storyKey: varchar("story_key", { length: 64 }).notNull(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  queryNorm: varchar("query_norm", { length: 255 }).notNull(),
+  sourceUrl: varchar("source_url", { length: 1000 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("story_uses_key_created_idx").on(table.storyKey, table.createdAt),
+]);
+

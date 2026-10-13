@@ -1,0 +1,399 @@
+"use server";
+
+import { db } from "@/lib/db";
+import {
+  clients,
+  blogs,
+  seoScans,
+  messages,
+  activityLog,
+} from "@/lib/db/schema";
+import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/lib/auth/helpers";
+import {
+  createClientSchema,
+  updateClientSchema,
+} from "@/lib/validators/client";
+import { ensureNicheProfile } from "@/lib/content/niche-profile-generator";
+import {
+  eq,
+  and,
+  like,
+  desc,
+  count,
+  avg,
+  sql,
+  or,
+  inArray,
+} from "drizzle-orm";
+import type { CreateClientInput, UpdateClientInput } from "@/lib/validators/client";
+
+// ─── getClients ─────────────────────────────────────────────────────────────
+
+export async function getClients(
+  search?: string,
+  status?: string,
+  page: number = 1,
+  pageSize: number = 20
+) {
+  await requireAdmin();
+
+  const conditions = [];
+
+  if (search && search.trim() !== "") {
+    const term = `%${search.trim()}%`;
+    conditions.push(
+      or(
+        like(clients.name, term),
+        like(clients.contactEmail, term)
+      )
+    );
+  }
+
+  if (status && status !== "all") {
+    conditions.push(
+      eq(clients.status, status as "onboarding" | "active" | "paused" | "churned")
+    );
+  }
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [clientRows, totalResult] = await Promise.all([
+    db
+      .select()
+      .from(clients)
+      .where(whereClause)
+      .orderBy(desc(clients.createdAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db
+      .select({ total: count() })
+      .from(clients)
+      .where(whereClause),
+  ]);
+
+  return {
+    clients: clientRows,
+    total: totalResult[0]?.total ?? 0,
+    page,
+    pageSize,
+  };
+}
+
+// ─── getClient ──────────────────────────────────────────────────────────────
+
+export async function getClient(id: string) {
+  await requireAdmin();
+
+  const [client] = await db
+    .select()
+    .from(clients)
+    .where(eq(clients.id, id))
+    .limit(1);
+
+  if (!client) {
+    throw new Error("Client not found");
+  }
+
+  const [blogCountResult] = await db
+    .select({ count: count() })
+    .from(blogs)
+    .where(eq(blogs.clientId, id));
+
+  return {
+    ...client,
+    blogCount: blogCountResult?.count ?? 0,
+  };
+}
+
+/**
+ * Save a client-level default custom generation prompt. Empty clears it. A
+ * per-blog custom prompt overrides this. Standalone so the client form /
+ * validators stay untouched.
+ */
+export async function updateClientCustomPrompt(
+  clientId: string,
+  value: string,
+  stackPersona?: boolean,
+): Promise<{ success: boolean; message: string }> {
+  await requireAdmin();
+  const trimmed = value.trim();
+  await db
+    .update(clients)
+    .set({
+      customPrompt: trimmed || null,
+      ...(stackPersona === undefined ? {} : { stackPersona }),
+      updatedAt: new Date(),
+    })
+    .where(eq(clients.id, clientId));
+  revalidatePath(`/clients/${clientId}`);
+  return {
+    success: true,
+    message: trimmed ? "Custom prompt saved" : "Custom prompt cleared",
+  };
+}
+
+// ─── createClient ───────────────────────────────────────────────────────────
+
+export async function createClient(data: CreateClientInput) {
+  const session = await requireAdmin();
+
+  const parsed = createClientSchema.parse(data);
+
+  const [newClient] = await db
+    .insert(clients)
+    .values({
+      name: parsed.name,
+      contactName: parsed.contactName || null,
+      contactEmail: parsed.contactEmail || null,
+      contactPhone: parsed.contactPhone || null,
+      niche: parsed.niche || null,
+      totalBlogsTarget: parsed.totalBlogsTarget ?? 0,
+      notesInternal: parsed.notesInternal || null,
+      customPrompt: parsed.customPrompt?.trim() || null,
+      stackPersona: parsed.stackPersona ?? false,
+      localPresence: parsed.localPresence ?? false,
+      ctaEnabled: parsed.ctaEnabled ?? false,
+      ctaLabel: parsed.ctaLabel || null,
+      ctaUrl: parsed.ctaUrl || null,
+      ctaPlacement: parsed.ctaPlacement ?? "bottom",
+      ctaColor: parsed.ctaColor || null,
+      languageMode: parsed.languageMode ?? null,
+      status: parsed.status ?? "onboarding",
+    })
+    .returning();
+
+  // Log activity
+  await db.insert(activityLog).values({
+    userId: session.user.id,
+    clientId: newClient.id,
+    action: "client.created",
+    entityType: "client",
+    entityId: newClient.id,
+    details: { name: newClient.name },
+  });
+
+  // Auto-generate a niche profile for niches not already hardcoded/generated.
+  // Idempotent + non-fatal (returns null on any failure; the client still
+  // saved). Adds a few seconds only the first time a brand-new niche is seen.
+  await ensureNicheProfile(parsed.niche);
+
+  return newClient;
+}
+
+// ─── updateClient ───────────────────────────────────────────────────────────
+
+export async function updateClient(id: string, data: UpdateClientInput) {
+  const session = await requireAdmin();
+
+  const parsed = updateClientSchema.parse(data);
+
+  // Build update object, only including defined fields
+  const updateData: Record<string, unknown> = { updatedAt: new Date() };
+
+  if (parsed.name !== undefined) updateData.name = parsed.name;
+  if (parsed.contactName !== undefined) updateData.contactName = parsed.contactName || null;
+  if (parsed.contactEmail !== undefined) updateData.contactEmail = parsed.contactEmail || null;
+  if (parsed.contactPhone !== undefined) updateData.contactPhone = parsed.contactPhone || null;
+  if (parsed.niche !== undefined) updateData.niche = parsed.niche || null;
+  if (parsed.totalBlogsTarget !== undefined) updateData.totalBlogsTarget = parsed.totalBlogsTarget;
+  if (parsed.notesInternal !== undefined) updateData.notesInternal = parsed.notesInternal || null;
+  if (parsed.customPrompt !== undefined) updateData.customPrompt = parsed.customPrompt?.trim() || null;
+  if (parsed.stackPersona !== undefined) updateData.stackPersona = parsed.stackPersona;
+  if (parsed.localPresence !== undefined) updateData.localPresence = parsed.localPresence;
+  if (parsed.ctaEnabled !== undefined) updateData.ctaEnabled = parsed.ctaEnabled;
+  if (parsed.ctaLabel !== undefined) updateData.ctaLabel = parsed.ctaLabel || null;
+  if (parsed.ctaUrl !== undefined) updateData.ctaUrl = parsed.ctaUrl || null;
+  if (parsed.ctaPlacement !== undefined) updateData.ctaPlacement = parsed.ctaPlacement;
+  if (parsed.ctaColor !== undefined) updateData.ctaColor = parsed.ctaColor || null;
+  if (parsed.languageMode !== undefined) updateData.languageMode = parsed.languageMode;
+  if (parsed.status !== undefined) updateData.status = parsed.status;
+
+  const [updatedClient] = await db
+    .update(clients)
+    .set(updateData)
+    .where(eq(clients.id, id))
+    .returning();
+
+  if (!updatedClient) {
+    throw new Error("Client not found");
+  }
+
+  // Log activity
+  await db.insert(activityLog).values({
+    userId: session.user.id,
+    clientId: id,
+    action: "client.updated",
+    entityType: "client",
+    entityId: id,
+    details: { updatedFields: Object.keys(parsed).filter((k) => parsed[k as keyof typeof parsed] !== undefined) },
+  });
+
+  // If the niche changed to a new one, generate its profile (idempotent).
+  if (parsed.niche !== undefined) {
+    await ensureNicheProfile(parsed.niche);
+  }
+
+  return updatedClient;
+}
+
+// ─── deleteClient (soft delete) ─────────────────────────────────────────────
+
+export async function deleteClient(id: string) {
+  const session = await requireAdmin();
+
+  const [updatedClient] = await db
+    .update(clients)
+    .set({ status: "churned", updatedAt: new Date() })
+    .where(eq(clients.id, id))
+    .returning();
+
+  if (!updatedClient) {
+    throw new Error("Client not found");
+  }
+
+  // Log activity
+  await db.insert(activityLog).values({
+    userId: session.user.id,
+    clientId: id,
+    action: "client.deleted",
+    entityType: "client",
+    entityId: id,
+    details: { name: updatedClient.name, softDelete: true },
+  });
+
+  return updatedClient;
+}
+
+// ─── deleteClients (batch soft delete) ──────────────────────────────────────
+
+export async function deleteClients(
+  ids: string[],
+): Promise<{ success: boolean; deleted: number; message: string }> {
+  const session = await requireAdmin();
+  if (ids.length === 0) return { success: true, deleted: 0, message: "Nothing selected." };
+
+  const updated = await db
+    .update(clients)
+    .set({ status: "churned", updatedAt: new Date() })
+    .where(inArray(clients.id, ids))
+    .returning({ id: clients.id, name: clients.name });
+
+  if (updated.length > 0) {
+    await db.insert(activityLog).values(
+      updated.map((c) => ({
+        userId: session.user.id,
+        clientId: c.id,
+        action: "client.deleted",
+        entityType: "client",
+        entityId: c.id,
+        details: { name: c.name, softDelete: true, batch: true },
+      })),
+    );
+  }
+
+  return {
+    success: true,
+    deleted: updated.length,
+    message: `Archived ${updated.length} client${updated.length === 1 ? "" : "s"}.`,
+  };
+}
+
+// ─── pauseClient / unpauseClient ────────────────────────────────────────────
+
+export async function pauseClient(id: string) {
+  const session = await requireAdmin();
+
+  const [updatedClient] = await db
+    .update(clients)
+    .set({ status: "paused", updatedAt: new Date() })
+    .where(eq(clients.id, id))
+    .returning();
+
+  if (!updatedClient) {
+    throw new Error("Client not found");
+  }
+
+  await db.insert(activityLog).values({
+    userId: session.user.id,
+    clientId: id,
+    action: "client.paused",
+    entityType: "client",
+    entityId: id,
+    details: { name: updatedClient.name },
+  });
+
+  return updatedClient;
+}
+
+export async function unpauseClient(id: string) {
+  const session = await requireAdmin();
+
+  const [updatedClient] = await db
+    .update(clients)
+    .set({ status: "active", updatedAt: new Date() })
+    .where(eq(clients.id, id))
+    .returning();
+
+  if (!updatedClient) {
+    throw new Error("Client not found");
+  }
+
+  await db.insert(activityLog).values({
+    userId: session.user.id,
+    clientId: id,
+    action: "client.unpaused",
+    entityType: "client",
+    entityId: id,
+    details: { name: updatedClient.name },
+  });
+
+  return updatedClient;
+}
+
+// ─── getClientStats ─────────────────────────────────────────────────────────
+
+export async function getClientStats(id: string) {
+  await requireAdmin();
+
+  const [blogStats] = await db
+    .select({
+      blogCount: count(),
+    })
+    .from(blogs)
+    .where(eq(blogs.clientId, id));
+
+  const [seoStats] = await db
+    .select({
+      avgScore: avg(seoScans.overallScore),
+    })
+    .from(seoScans)
+    .where(eq(seoScans.clientId, id));
+
+  const [messageStats] = await db
+    .select({
+      messageCount: count(),
+    })
+    .from(messages)
+    .where(eq(messages.clientId, id));
+
+  // Posts this month: count blog post verifications in current month
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const [postsThisMonth] = await db
+    .select({
+      totalPosts: sql<number>`COALESCE(SUM(${sql.identifier("posts_in_period")}), 0)`,
+    })
+    .from(sql`post_verifications`)
+    .where(
+      sql`${sql.identifier("client_id")} = ${id} AND ${sql.identifier("checked_at")} >= ${startOfMonth.toISOString()}`
+    );
+
+  return {
+    blogCount: blogStats?.blogCount ?? 0,
+    avgSeoScore: seoStats?.avgScore ? Math.round(Number(seoStats.avgScore)) : null,
+    messageCount: messageStats?.messageCount ?? 0,
+    postsThisMonth: postsThisMonth?.totalPosts ?? 0,
+  };
+}
